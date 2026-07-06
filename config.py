@@ -15,7 +15,7 @@ DB_NAME = os.getenv("DB_NAME", "gatodicer")
 ADMIN_USER_ID = 1200925985999171706
 
 AUTO_POST_CHANNEL_ID = 1523459736169877686
-AUTO_POST_INTERVAL = 600
+AUTO_POST_INTERVAL = 120
 
 # Channels where ticket scanning / form start is ignored (e.g. general chat, auto-post)
 CHANNEL_BLACKLIST = [
