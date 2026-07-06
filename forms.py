@@ -1,9 +1,13 @@
 import random
+
+import discord
+
 import config
 from bets import (
     bet_validator,
     calculate_my_bet,
     extract_crypto_address,
+    format_bet_display,
     get_bet_info,
     get_max_bet,
     get_price,
@@ -11,11 +15,79 @@ from bets import (
     normalize_coin,
     usd_to_smallest_unit,
 )
-from services import send_apirone
-from state import active_forms, get_form, is_maintenance_mode, notify_maintenance, register_ticket_channel, ticket_channels
+from services import create_apirone_address, send_apirone
+from state import (
+    active_forms,
+    finish_form,
+    get_form,
+    is_maintenance_mode,
+    is_testing_mode,
+    notify_maintenance,
+    register_ticket_channel,
+    ticket_channels,
+)
 
 LISTEN_ROLES = [1258727325265297408, 1258732498482106398]
 VALIDATORS = {"bet_validator": bet_validator}
+COIN_ADDRESS_COMMANDS = {"!ltc": "ltc", "!btc": "btc", "!eth": "eth"}
+
+DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
+1. **I Win ALL 7's** — FT3 → 2.5x | FT5 → 3.5x Bet
+2. **I Win ALL 7's & Ties** — FT3 → 3.5x | FT5 → 4x Bet
+3. **I Win Ties** — FT3 → 10% MORE | FT5 → 25% MORE Bet
+4. **Fair** — 15% LESS Bet"""
+
+
+def build_dm_gamemodes_text():
+    return DM_GAMEMODES_TEXT
+
+
+def build_dm_help_text(user_id):
+    lines = [
+        "**📖 Commands**",
+        "`!help` — show this list",
+        "`!gamemodes` — dice gamemode info",
+        "`!housebal` — house balance in USD (BTC, ETH, LTC)",
+        "",
+        "**🎫 Ticket commands**",
+        "`!ltc` / `!btc` / `!eth` — get a deposit address",
+        "`!restart` — restart the bet form (only before funds are sent)",
+    ]
+    if user_id == config.ADMIN_USER_ID:
+        lines.extend([
+            "",
+            "**🔧 Admin**",
+            "`!panel` — stats panel",
+            "`!wallet` — wallet addresses",
+            "`!toggle maintenance` — pause tickets & auto-post",
+            "`!toggle testing` — skip form, auto-start test game",
+        ])
+    return "\n".join(lines)
+
+
+def channel_can_send(channel):
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    me = channel.guild.me
+    if me is None:
+        return True
+    perms = channel.permissions_for(me)
+    return perms.view_channel and perms.send_messages
+
+
+async def safe_channel_send(channel, content, *, form=None):
+    if not channel_can_send(channel):
+        print(f"[skip] no send permission in #{getattr(channel, 'name', '?')} ({channel.id})")
+        if form is not None:
+            finish_form(channel, form)
+        return None
+    try:
+        return await channel.send(content)
+    except discord.Forbidden:
+        print(f"[forbidden] cannot send in #{getattr(channel, 'name', '?')} ({channel.id})")
+        if form is not None:
+            finish_form(channel, form)
+        return None
 
 
 def message_references_bot(message, bot_user):
@@ -86,9 +158,68 @@ def should_process_channel(channel, message=None, bot_user=None):
     return False
 
 
+async def resolve_ticket_user_id(channel, bot_user, *, was_tracked=False):
+    ticket_user_id = None
+    bot_referenced = False
+    async for msg in channel.history(limit=30):
+        if message_references_bot(msg, bot_user):
+            bot_referenced = True
+            ticket_user_id = msg.author.id
+            break
+    if not bot_referenced and not was_tracked:
+        return None
+    if not ticket_user_id:
+        async for msg in channel.history(limit=30):
+            if not msg.author.bot:
+                ticket_user_id = msg.author.id
+                break
+    return ticket_user_id
+
+
+TESTING_RESPONSES = {
+    "game": "dice",
+    "gamemode": "7s",
+    "first_to": "ft3",
+    "first": "@mention 1",
+    "mode": "normal",
+    "bet": "1 ltc",
+}
+
+
+async def start_testing_ticket(channel, bot_user, bot=None, *, was_tracked=False):
+    from games import start_game
+
+    if is_channel_blacklisted(channel.id):
+        return
+    if get_form(channel.id):
+        return
+
+    ticket_user_id = await resolve_ticket_user_id(
+        channel, bot_user, was_tracked=was_tracked or channel.id in ticket_channels
+    )
+    if not ticket_user_id:
+        return
+
+    register_ticket_channel(channel.id)
+
+    form = {
+        "ticket_user_id": ticket_user_id,
+        "step": len(config.FORM_QUESTIONS),
+        "responses": dict(TESTING_RESPONSES),
+        "waiting_for_address": False,
+        "waiting_for_confirm": False,
+    }
+    active_forms[channel.id] = form
+    await start_game(channel, form, bot_user)
+
+
 async def handle_bot_added_to_channel(bot, channel):
     if is_maintenance_mode():
         await notify_maintenance(channel)
+        return
+    if is_testing_mode():
+        if register_ticket_channel(channel.id):
+            await start_testing_ticket(channel, bot.user, bot, was_tracked=True)
         return
     if register_ticket_channel(channel.id):
         await notify_admin_ticket_added(bot, channel)
@@ -143,7 +274,7 @@ def build_confirm_text(channel, form, bot_user):
     }.get(gamemode_key, "wins 7s")
 
     if game == "dice":
-        return f"dice {first_to} {mode} {first}{gamemode_text}"
+        return f"{first_to} {mode} {first}{gamemode_text}"
     return f"cf {first_to} {first} {side}"
 
 
@@ -154,26 +285,21 @@ async def start_ticket_form(channel, bot_user, bot=None):
         return
 
     was_tracked = channel.id in ticket_channels
-    ticket_user_id = None
-    bot_referenced = False
-    async for msg in channel.history(limit=30):
-        if message_references_bot(msg, bot_user):
-            bot_referenced = True
-            ticket_user_id = msg.author.id
-            break
-
-    if not bot_referenced and not was_tracked:
-        return
 
     if is_maintenance_mode():
         await notify_maintenance(channel)
         return
 
+    if is_testing_mode():
+        await start_testing_ticket(channel, bot_user, bot, was_tracked=was_tracked)
+        return
+
+    if not channel_can_send(channel):
+        return
+
+    ticket_user_id = await resolve_ticket_user_id(channel, bot_user, was_tracked=was_tracked)
     if not ticket_user_id:
-        async for msg in channel.history(limit=30):
-            if not msg.author.bot:
-                ticket_user_id = msg.author.id
-                break
+        return
 
     if register_ticket_channel(channel.id) and bot:
         await notify_admin_ticket_added(bot, channel)
@@ -208,15 +334,15 @@ async def ask_next_step(channel, bot_user):
     question_text = format_text(q.get("text", ""), mention, responses, bot_user, dynamic)
 
     if q["type"] in ("choice", "open"):
-        await channel.send(question_text)
+        await safe_channel_send(channel, question_text, form=form)
         return
 
     if q["type"] == "listen_address":
         bet_parts = responses.get("bet", "").split()
         dynamic.update({
             "coin": normalize_coin(bet_parts[-1]),
-            "my_bet": calculate_my_bet(form),
-            "his_bet": bet_parts[0],
+            "my_bet": format_bet_display(calculate_my_bet(form) or 0),
+            "his_bet": format_bet_display(bet_parts[0]),
         })
         question_text = format_text(q.get("text", ""), mention, responses, bot_user, dynamic)
         form["waiting_for_address"] = True
@@ -225,7 +351,7 @@ async def ask_next_step(channel, bot_user):
         form["confirm_text"] = question_text
         form["waiting_for_confirm"] = True
 
-    await channel.send(question_text)
+    await safe_channel_send(channel, question_text, form=form)
 
 
 async def handle_form_step(message, form, bot_user):
@@ -270,6 +396,39 @@ async def handle_form_step(message, form, bot_user):
         await ask_next_step(message.channel, bot_user)
 
 
+async def handle_ticket_command(message, bot_user, bot=None):
+    content = message.content.strip().lower()
+
+    if content in COIN_ADDRESS_COMMANDS:
+        coin = COIN_ADDRESS_COMMANDS[content]
+        address = await create_apirone_address(coin)
+        if address:
+            await message.channel.send(f"`{address}`")
+        else:
+            await message.channel.send(f"❌ Failed to generate {coin.upper()} address.")
+        return True
+
+    if content == "!restart":
+        await handle_restart_command(message, bot_user, bot)
+        return True
+
+    return False
+
+
+async def handle_restart_command(message, bot_user, bot=None):
+    channel = message.channel
+    form = get_form(channel.id)
+    if form and form.get("payout_address"):
+        await channel.send("❌ Cannot restart — funds have already been sent.")
+        return
+
+    if form:
+        finish_form(channel, form)
+
+    register_ticket_channel(channel.id)
+    await start_ticket_form(channel, bot_user, bot)
+
+
 async def handle_global_listeners(message, bot_user, start_game_fn):
     form = get_form(message.channel.id)
     if not form:
@@ -306,6 +465,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn):
 
     if form.get("waiting_for_confirm"):
         expected = form.get("confirm_text")
+    
         if expected and message.content.strip() == expected.strip() and member_has_listen_role(message.author):
             await message.reply("conf")
             form["waiting_for_adder_confirm"] = True

@@ -65,6 +65,13 @@ def get_max_bet(form):
     return 50
 
 
+def format_bet_display(value):
+    num = round(float(value), 2)
+    if num == int(num):
+        return str(int(num))
+    return f"{num:.2f}"
+
+
 def calculate_my_bet(form):
     responses = form.get("responses", {})
     try:

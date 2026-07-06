@@ -2,10 +2,15 @@ active_forms = {}
 ticket_channels = set()
 maintenance_mode = False
 maintenance_notified_channels = set()
+testing_mode = False
 
 
 def is_maintenance_mode():
     return maintenance_mode
+
+
+def is_testing_mode():
+    return testing_mode
 
 
 def toggle_maintenance():
@@ -16,11 +21,20 @@ def toggle_maintenance():
     return maintenance_mode
 
 
+def toggle_testing():
+    global testing_mode
+    testing_mode = not testing_mode
+    return testing_mode
+
+
 async def notify_maintenance(channel):
     if channel.id in maintenance_notified_channels:
         return
     maintenance_notified_channels.add(channel.id)
-    await channel.send("🚧 **MAINTENANCE MODE IS ENABLED** 🚧")
+    try:
+        await channel.send("🚧 **MAINTENANCE MODE IS ENABLED** 🚧")
+    except Exception:
+        maintenance_notified_channels.discard(channel.id)
 
 
 def register_ticket_channel(channel_id):

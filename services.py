@@ -2,10 +2,13 @@ import requests
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 import config
+from bets import UNITS, get_price
 
 mongo_client = AsyncIOMotorClient(config.MONGO_URI)
 db = mongo_client[config.DB_NAME]
 stats_collection = db.stats
+
+HOUSE_COINS = ("btc", "eth", "ltc")
 
 
 async def get_stats():
@@ -71,11 +74,64 @@ async def create_apirone_address(coin):
     return None
 
 
-async def get_wallets():
+async def get_account_balance():
+    if not config.APIRONE_ACCOUNT:
+        return None
     try:
-        resp = requests.get(f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/wallets")
+        resp = requests.get(
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/balance",
+            timeout=15,
+        )
         if resp.status_code == 200:
             return resp.json()
     except Exception:
         pass
-    return {}
+    return None
+
+
+async def get_wallets():
+    data = await get_account_balance()
+    if not data:
+        return {}
+    wallets = []
+    for entry in data.get("balance", []):
+        coin = entry.get("currency", "").lower()
+        if coin not in HOUSE_COINS:
+            continue
+        total = entry.get("total", 0)
+        wallets.append({
+            "currency": coin,
+            "balance": total / UNITS[coin],
+            "balance_smallest": total,
+        })
+    return {"wallets": wallets}
+
+
+def _coin_balance_usd(coin, total_smallest):
+    crypto = total_smallest / UNITS[coin]
+    return crypto * get_price(coin)
+
+
+async def get_house_balance_text():
+    data = await get_account_balance()
+    if not data:
+        return "❌ Could not fetch house balance from Apirone."
+
+    balances = {
+        entry.get("currency", "").lower(): entry.get("total", 0)
+        for entry in data.get("balance", [])
+    }
+
+    lines = ["**🏦 House Balance**"]
+    total_usd = 0.0
+    for coin in HOUSE_COINS:
+        smallest = balances.get(coin, 0)
+        try:
+            usd = _coin_balance_usd(coin, smallest)
+        except Exception:
+            usd = 0.0
+        total_usd += usd
+        lines.append(f"**{coin.upper()}:** `${usd:,.2f}`")
+
+    lines.append(f"**Total:** `${total_usd:,.2f}`")
+    return "\n".join(lines)

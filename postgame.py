@@ -24,13 +24,10 @@ async def payout_winnings_if_any(channel, form):
         coin = form.get("winnings_coin", "ltc")
         address = await create_apirone_address(coin)
         if address:
-            await channel.send(
-                f"Pay ~`{form['winnings_crypto']:.8f}` {coin.upper()} "
-                f"(≈ `${form['winnings_usd']:.2f}`) to `{address}`"
-            )
+            await channel.send(f"`{address}`")
         else:
             await channel.send(f"❌ Failed to generate {coin.upper()} address.")
-    await finish_form(channel, form)
+    finish_form(channel, form)
 
 
 async def end_game(channel, form, self_won, bot_user):

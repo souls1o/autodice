@@ -3,16 +3,19 @@ from discord.ext import commands, tasks
 import asyncio
 import config
 from forms import (
+    build_dm_gamemodes_text,
+    build_dm_help_text,
     handle_bot_added_to_channel,
     handle_form_step,
     handle_global_listeners,
+    handle_ticket_command,
     should_process_channel,
     start_ticket_form,
     was_bot_added_to_channel,
 )
 from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, start_game
-from services import get_stats, get_wallets
-from state import active_forms, get_form, is_maintenance_mode, toggle_maintenance
+from services import get_house_balance_text, get_stats, get_wallets
+from state import active_forms, get_form, is_maintenance_mode, is_ticket_channel, toggle_maintenance, toggle_testing
 
 bot = commands.Bot(command_prefix="!", self_bot=True)
 
@@ -50,6 +53,18 @@ async def on_message(message: discord.Message):
         return
 
     if isinstance(message.channel, discord.DMChannel):
+        content = message.content.strip().lower()
+
+        if content == "!help":
+            await message.reply(build_dm_help_text(message.author.id))
+            return
+        if content == "!gamemodes":
+            await message.reply(build_dm_gamemodes_text())
+            return
+        if content == "!housebal":
+            await message.reply(await get_house_balance_text())
+            return
+
         if message.content == "!panel" and message.author.id == config.ADMIN_USER_ID:
             stats = await get_stats()
             await message.reply(
@@ -63,9 +78,6 @@ async def on_message(message: discord.Message):
                 f"House Balance: Loading..."
             )
             return
-        if message.content == "!commands":
-            await message.reply("Work in progress...")
-            return
         if message.content == "!wallet" and message.author.id == config.ADMIN_USER_ID:
             wallets = await get_wallets()
             lines = ["**Wallets:**"]
@@ -78,11 +90,20 @@ async def on_message(message: discord.Message):
             status = "enabled" if enabled else "disabled"
             await message.reply(f"Maintenance mode is {status}.")
             return
+        if message.content.strip().lower() == "!toggle testing" and message.author.id == config.ADMIN_USER_ID:
+            enabled = toggle_testing()
+            status = "enabled" if enabled else "disabled"
+            await message.reply(f"Testing mode is {status}.")
+            return
 
     if not isinstance(message.channel, discord.TextChannel):
         return
     if not should_process_channel(message.channel, message, bot.user):
         return
+
+    if is_ticket_channel(message.channel):
+        if await handle_ticket_command(message, bot.user, bot):
+            return
 
     channel_id = message.channel.id
     form = get_form(channel_id)
@@ -92,9 +113,18 @@ async def on_message(message: discord.Message):
             await handle_user_roll(message, form, bot.user)
         return
 
-    if message.author.id == DA_HOOD_BOT_ID and form and "game_state" in form:
-        await handle_da_hood_message(message, form, bot.user)
-        return
+    if form and "game_state" in form:
+        state = form["game_state"]
+        if state.get("game_type") == "dice" and message.author.bot and (
+            state.get("waiting_for_embed")
+            or state.get("pending_bot_total") is not None
+            or state.get("awaiting_user_after_bot")
+        ):
+            await handle_da_hood_message(message, form, bot.user)
+            return
+        if message.author.id == DA_HOOD_BOT_ID:
+            await handle_da_hood_message(message, form, bot.user)
+            return
 
     form = get_form(channel_id)
     if form and not form.get("game_state") and not form.get("waiting_for_rerun") and not form.get("waiting_for_confirm"):
