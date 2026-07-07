@@ -257,19 +257,13 @@ async def start_testing_ticket(channel, bot_user, bot=None, *, was_tracked=False
     if get_form(channel.id):
         return
 
-    ticket_user_id = await resolve_ticket_user_id(
-        channel, bot_user, was_tracked=was_tracked or channel.id in ticket_channels
-    )
-    if not ticket_user_id:
-        return
-
     register_ticket_channel(channel.id)
 
-    form = new_form_dict(channel.id, ticket_user_id)
+    form = new_form_dict(channel.id, config.ADMIN_USER_ID)
     form["step"] = len(config.FORM_QUESTIONS)
     form["responses"] = dict(TESTING_RESPONSES)
     active_forms[channel.id] = form
-    await start_game(channel, form, bot_user)
+    await start_game(channel, form, bot_user, bot)
 
 
 async def handle_bot_added_to_channel(bot, channel):
@@ -532,14 +526,14 @@ async def handle_restart_command(message, bot_user, bot=None):
     await start_ticket_form(channel, bot_user, bot)
 
 
-async def handle_global_listeners(message, bot_user, start_game_fn):
+async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
     form = get_form(message.channel.id)
     if not form:
         return
 
     if form.get("waiting_for_rerun"):
         from postgame import handle_rerun_response
-        await handle_rerun_response(message, form, bot_user, start_game_fn)
+        await handle_rerun_response(message, form, bot_user, start_game_fn, bot)
         if message.channel.id not in active_forms:
             return
 
@@ -589,4 +583,4 @@ async def handle_global_listeners(message, bot_user, start_game_fn):
         ):
             form["waiting_for_confirm"] = False
             form["waiting_for_adder_confirm"] = False
-            await start_game_fn(message.channel, form, bot_user)
+            await start_game_fn(message.channel, form, bot_user, bot)

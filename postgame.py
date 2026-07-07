@@ -13,7 +13,7 @@ from bets import (
     ticket_profit_usd,
     usd_to_smallest_unit,
 )
-from forms import build_confirm_text, ticket_mention
+from testing_helpers import send_game_message
 from services import create_apirone_address, send_apirone
 from state import cancel_rerun_timeout, finish_form, get_form, is_testing_mode, save_session_from_form
 
@@ -47,7 +47,7 @@ async def post_victory_message(guild, form):
         await channel.send(f"v <@{recipient_id}>")
 
 
-async def announce_game_result(channel, form, self_won, bot_user):
+async def announce_game_result(channel, form, self_won, bot_user, bot=None):
     game_num = await get_next_game_number(channel.guild)
     mention = ticket_mention(channel, form)
     his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
@@ -61,12 +61,16 @@ async def announce_game_result(channel, form, self_won, bot_user):
         winner, loser = mention, bot_user.mention
         winner_bet, loser_bet = his_bet, my_bet
 
-    await channel.send(
+    text = (
         f"Game #{game_num} <:dahoodcasino:1259258576015458426>\n"
         f"<:Dices:1259259866254676049>\n"
         f"{winner} overtakes {loser}\n"
         f"{winner_bet}v{loser_bet}"
     )
+    if bot:
+        await send_game_message(bot, channel, text)
+    else:
+        await channel.send(text)
 
 
 async def record_winnings(channel, form, self_won):
@@ -96,14 +100,21 @@ async def payout_winnings_if_any(channel, form):
     finish_form(channel, form, payout=True)
 
 
-async def end_game(channel, form, self_won, bot_user):
+async def end_game(channel, form, self_won, bot_user, bot=None):
     form.pop("game_state", None)
     await record_winnings(channel, form, self_won)
     if not is_testing_mode():
         await post_victory_message(channel.guild, form)
-    await announce_game_result(channel, form, self_won, bot_user)
+    if bot:
+        await announce_game_result(channel, form, self_won, bot_user, bot)
+    else:
+        await announce_game_result(channel, form, self_won, bot_user)
     mention = ticket_mention(channel, form)
-    await channel.send(f"{mention} Do you want to rerun? (yes/no)")
+    rerun_text = f"{mention} Do you want to rerun? (yes/no)"
+    if bot:
+        await send_game_message(bot, channel, rerun_text)
+    else:
+        await channel.send(rerun_text)
     form["waiting_for_rerun"] = True
     form["rerun_timeout_task"] = asyncio.create_task(_rerun_timeout(channel))
 
@@ -120,7 +131,7 @@ async def _rerun_timeout(channel):
         pass
 
 
-async def handle_rerun_response(message, form, bot_user, start_game_fn):
+async def handle_rerun_response(message, form, bot_user, start_game_fn, bot=None):
     if not form.get("waiting_for_rerun") or message.author.id != form["ticket_user_id"]:
         return
 

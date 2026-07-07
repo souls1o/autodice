@@ -6,6 +6,7 @@ import config
 from forms import is_roll_command, member_has_listen_role
 from postgame import end_game
 from state import save_session_from_form
+from testing_helpers import get_roll_channel, get_ticket_channel, send_game_message
 
 DA_HOOD_BOT_ID = 1200925985999171706
 ROLL_EMBED_PATTERN = re.compile(r"(\d+)\s*(?:&|\+)\s*(\d+)")
@@ -46,11 +47,11 @@ async def get_command_before_message(channel, embed_message, predicate):
     return None
 
 
-async def trigger_bot_roll(channel, form, bot_user):
+async def trigger_bot_roll(roll_channel, form, bot_user):
     state = form["game_state"]
     await asyncio.sleep(1)
     hype = random.choice(config.ROLL_HYPE_MESSAGES)
-    await channel.send(f"-roll {hype}")
+    await roll_channel.send(f"-roll {hype}")
     state["waiting_for_embed"] = True
     state["roll_initiator_id"] = bot_user.id
 
@@ -94,23 +95,24 @@ def _pair_winner(me_total, you_total, gamemode, roll_mode):
     return "me" if me_total > you_total else "you"
 
 
-async def _score_pair(channel, form, bot_user, me_total, you_total, *, continue_batch=False):
+async def _score_pair(roll_channel, form, bot_user, bot, me_total, you_total, *, continue_batch=False):
     state = form["game_state"]
     winner = _pair_winner(me_total, you_total, state["gamemode"], state["mode"])
+    ticket_channel = await get_ticket_channel(bot, form)
 
     if winner == "me":
         state["self_score"] += 1
     elif winner == "you":
         state["adder_score"] += 1
 
-    await channel.send(f"`{state['self_score']}-{state['adder_score']}`")
+    await send_game_message(bot, ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
 
     first_to = state["first_to"]
     if state["self_score"] >= first_to or state["adder_score"] >= first_to:
         self_won = state["self_score"] >= first_to
         winner_id = bot_user.id if self_won else form["ticket_user_id"]
-        await channel.send(f"<@{winner_id}> won!")
-        await end_game(channel, form, self_won, bot_user)
+        await send_game_message(bot, ticket_channel, f"<@{winner_id}> won!")
+        await end_game(ticket_channel, form, self_won, bot_user, bot)
         return True
 
     if continue_batch:
@@ -124,16 +126,16 @@ async def _score_pair(channel, form, bot_user, me_total, you_total, *, continue_
     state.pop("bot_first_embed_id", None)
     state["waiting_for_embed"] = False
     state["current_player"] = state["first_player"]
-    await do_next_roll(channel, form, bot_user)
+    await do_next_roll(roll_channel, form, bot_user, bot)
     return False
 
 
-async def do_next_roll(channel, form, bot_user):
+async def do_next_roll(roll_channel, form, bot_user, bot):
     state = form["game_state"]
     if state.get("game_type") != "dice" or state.get("waiting_for_embed"):
         return
     if is_bot_turn(state):
-        await trigger_bot_roll(channel, form, bot_user)
+        await trigger_bot_roll(roll_channel, form, bot_user)
 
 
 def parse_roll_from_embed(message):
@@ -151,7 +153,7 @@ def parse_roll_from_embed(message):
     return None
 
 
-async def handle_roll_embed(message, form, bot_user):
+async def handle_roll_embed(message, form, bot_user, bot):
     state = form["game_state"]
     state.setdefault("consumed_embed_ids", set())
     if message.id in state["consumed_embed_ids"]:
@@ -196,7 +198,7 @@ async def handle_roll_embed(message, form, bot_user):
         state["user_totals_queue"] = []
         state["waiting_for_embed"] = False
         state["consumed_embed_ids"].add(message.id)
-        await _score_pair(message.channel, form, bot_user, bot_total, total)
+        await _score_pair(message.channel, form, bot_user, bot, bot_total, total)
         return
 
     if cmd.author.id == ticket_user_id:
@@ -224,7 +226,7 @@ async def handle_roll_embed(message, form, bot_user):
         remaining = state["bot_rolls_remaining"]
         state["consumed_embed_ids"].add(message.id)
         game_over = await _score_pair(
-            message.channel, form, bot_user, total, you_total, continue_batch=remaining > 0
+            message.channel, form, bot_user, bot, total, you_total, continue_batch=remaining > 0
         )
         if game_over:
             return
@@ -243,7 +245,7 @@ async def handle_roll_embed(message, form, bot_user):
     state["consumed_embed_ids"].add(message.id)
 
 
-async def handle_coinflip_embed(message, form, bot_user):
+async def handle_coinflip_embed(message, form, bot_user, bot):
     state = form["game_state"]
     if not state.get("waiting_for_embed"):
         return
@@ -291,14 +293,15 @@ async def handle_coinflip_embed(message, form, bot_user):
     if house_flip == state["house_side"]:
         state["self_score"] += 1
 
-    await channel.send(f"`{state['self_score']}-{state['adder_score']}`")
+    ticket_channel = await get_ticket_channel(bot, form)
+    await send_game_message(bot, ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
 
     first_to = state["first_to"]
     if state["self_score"] >= first_to or state["adder_score"] >= first_to:
         self_won = state["self_score"] >= first_to
         winner_id = bot_user.id if self_won else form["ticket_user_id"]
-        await channel.send(f"<@{winner_id}> won!")
-        await end_game(channel, form, self_won, bot_user)
+        await send_game_message(bot, ticket_channel, f"<@{winner_id}> won!")
+        await end_game(ticket_channel, form, self_won, bot_user, bot)
         return
 
     state["round_flips"] = {"me": None, "you": None}
@@ -306,16 +309,17 @@ async def handle_coinflip_embed(message, form, bot_user):
     state["waiting_for_embed"] = True
 
 
-async def handle_da_hood_message(message, form, bot_user):
+async def handle_da_hood_message(message, form, bot_user, bot):
     state = form["game_state"]
     if state.get("game_type") == "coinflip":
-        await handle_coinflip_embed(message, form, bot_user)
+        await handle_coinflip_embed(message, form, bot_user, bot)
     else:
-        await handle_roll_embed(message, form, bot_user)
+        await handle_roll_embed(message, form, bot_user, bot)
 
 
-async def start_game(channel, form, bot_user):
+async def start_game(channel, form, bot_user, bot=None):
     form["game_started"] = True
+    form["ticket_channel_id"] = channel.id
     save_session_from_form(channel.id, form)
     responses = form["responses"]
     game = responses.get("game", "dice")
@@ -369,4 +373,5 @@ async def start_game(channel, form, bot_user):
         "pending_user_embeds": 0,
         "bot_rolls_remaining": 0,
     }
-    await do_next_roll(channel, form, bot_user)
+    roll_channel = await get_roll_channel(bot, channel) if bot else channel
+    await do_next_roll(roll_channel, form, bot_user, bot)

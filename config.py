@@ -21,6 +21,9 @@ AUTO_POST_INTERVAL = 120
 GAME_LOG_CHANNEL_ID = 1258789286388568134
 VOUCH_CHANNEL_ID = 1258789148702146700
 
+# Dice rolls during testing mode happen here (selfbot vs admin only)
+TESTING_CHANNEL_ID = 1523459765613891726
+
 # Staff roles allowed to be recorded as the wager funds recipient
 FUNDS_RECIPIENT_ROLE_IDS = [
     1258727325265297408
