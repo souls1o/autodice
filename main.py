@@ -16,7 +16,7 @@ from forms import (
     was_bot_added_to_channel,
 )
 from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, start_game
-from services import get_house_balance_text, get_stats, get_wallets
+from services import get_house_balance_text, build_stats_text, get_wallets
 from state import active_forms, clear_ticket_session, get_form, is_maintenance_mode, is_testing_mode, is_ticket_channel, toggle_maintenance, toggle_testing
 from testing_helpers import get_active_game_form, is_testing_roll_channel
 
@@ -136,18 +136,8 @@ async def _handle_message(message: discord.Message):
             await message.reply(await get_house_balance_text())
             return
 
-        if message.content == "!panel" and message.author.id == config.ADMIN_USER_ID:
-            stats = await get_stats()
-            await message.reply(
-                f"**📊 Admin Panel**\n\n"
-                f"**Daily:** Wagered ${stats.get('daily', {}).get('wagered', 0)}\n"
-                f"**Weekly:** Wagered ${stats.get('weekly', {}).get('wagered', 0)}\n"
-                f"**Monthly:** Wagered ${stats.get('monthly', {}).get('wagered', 0)}\n"
-                f"**All Time:** Wagered ${stats.get('all_time', {}).get('wagered', 0)}\n\n"
-                f"Most played: Dice\n"
-                f"Unique users: {len(stats.get('unique_users', []))}\n"
-                f"House Balance: Loading..."
-            )
+        if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
+            await message.reply(await build_stats_text())
             return
         if message.content == "!wallet" and message.author.id == config.ADMIN_USER_ID:
             wallets = await get_wallets()

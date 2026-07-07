@@ -66,7 +66,7 @@ def build_dm_help_text(user_id):
         lines.extend([
             "",
             "**🔧 Admin**",
-            "`!panel` — stats panel",
+            "`!stats` — wagered, profit, games, and house balance",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
             "`!toggle testing` — skip form, auto-start test game",
