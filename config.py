@@ -17,6 +17,29 @@ ADMIN_USER_ID = 1200925985999171706
 AUTO_POST_CHANNEL_ID = 1523459736169877686
 AUTO_POST_INTERVAL = 120
 
+# Channel scanned for the latest Game #<number> to increment after each game
+GAME_LOG_CHANNEL_ID = 1258789286388568134
+VOUCH_CHANNEL_ID = 1258789148702146700
+
+# Staff roles allowed to be recorded as the wager funds recipient
+FUNDS_RECIPIENT_ROLE_IDS = [
+    1258727325265297408
+]
+
+ROLL_HYPE_MESSAGES = [
+    "gg",
+    "LOCK IN",
+    "I sentence you to death",
+    "GET OVER HERE",
+    "womp womp",
+    "HUX IS MY DADDY",
+    "6&6",
+    "get cooked kid",
+    "bout to cry?",
+    "GAME OVER",
+    "lol",
+]
+
 # Channels where ticket scanning / form start is ignored (e.g. general chat, auto-post)
 CHANNEL_BLACKLIST = [
     AUTO_POST_CHANNEL_ID,

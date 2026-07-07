@@ -1,7 +1,11 @@
 import asyncio
+import random
 import re
-from forms import member_has_listen_role
+
+import config
+from forms import is_roll_command, member_has_listen_role
 from postgame import end_game
+from state import save_session_from_form
 
 DA_HOOD_BOT_ID = 1200925985999171706
 ROLL_EMBED_PATTERN = re.compile(r"(\d+)\s*(?:&|\+)\s*(\d+)")
@@ -23,7 +27,7 @@ async def get_roll_command_before_embed(
     channel, embed_message, *, initiator_id=None, exclude_author_id=None, after_message_id=None
 ):
     async for msg in channel.history(limit=50, before=embed_message):
-        if msg.content.strip().lower() != "-roll":
+        if not is_roll_command(msg.content):
             continue
         if after_message_id and msg.id <= after_message_id:
             continue
@@ -45,7 +49,8 @@ async def get_command_before_message(channel, embed_message, predicate):
 async def trigger_bot_roll(channel, form, bot_user):
     state = form["game_state"]
     await asyncio.sleep(1)
-    await channel.send("-roll")
+    hype = random.choice(config.ROLL_HYPE_MESSAGES)
+    await channel.send(f"-roll {hype}")
     state["waiting_for_embed"] = True
     state["roll_initiator_id"] = bot_user.id
 
@@ -310,6 +315,8 @@ async def handle_da_hood_message(message, form, bot_user):
 
 
 async def start_game(channel, form, bot_user):
+    form["game_started"] = True
+    save_session_from_form(channel.id, form)
     responses = form["responses"]
     game = responses.get("game", "dice")
     first_to = int(responses.get("first_to", "ft3").replace("ft", ""))
