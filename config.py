@@ -50,10 +50,10 @@ CHANNEL_BLACKLIST = [
     1258789148702146700
 ]
 
-AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] FT3 → `2.5x Bet` / FT5 → `3.5x Bet` | __I Win ALL 7's__
-[<:Dices:1259259866254676049>] FT3 → `3.5x Bet` / FT5 → `4x Bet` | __I Win ALL 7's & Ties__
-[<:Dices:1259259866254676049>] FT3 → `10% MORE BET` / FT5 → `25% MORE Bet` | __I Win Ties__
-[<:Dices:1259259866254676049>] FT3/FT5 → `15%-10% LESS Bet` | __Fair__**
+AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2.5x Bet` / FT5 → `3.5x Bet`
+[<:Dices:1259259866254676049>] __I Win ALL 7's & Ties__ | FT3 → `3.5x Bet` / FT5 → `4x Bet`
+[<:Dices:1259259866254676049>] __I Win Ties__ | FT3 → `10% MORE BET` / FT5 → `25% MORE Bet`
+[<:Dices:1259259866254676049>] __Fair__ | FT3/FT5 → `15%-10% LESS Bet`**
 > 🤖 **Make a Ticket - I'M AUTOMATED (MIN: __$1__ | MAX: __$200__)** <:BTC:1450767429465800878><:eth:1289062489363058708><:ltc:1259292428175806504>
 """
 # [<:Coin:1259259605255720980>] FT3/FT5 → `15% LESS Bet` | __Fair__**
@@ -78,7 +78,7 @@ FORM_QUESTIONS = [
 1. `I Win ALL 7's — FT3 → 2.5x | FT5 → 3.5x Bet`
 2. `I Win ALL 7's & Ties — FT3 → 3.5x | FT5 → 4x Bet`
 3. `I Win Ties — FT3 → 10% | FT5 → 25% MORE Bet`
-4. `Fair — 15% LESS Bet`
+4. `Fair — 15%-10% LESS Bet`
 
 -# @mention
 """,

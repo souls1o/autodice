@@ -352,8 +352,8 @@ def build_confirm_text(channel, form, bot_user):
     side = responses.get("side", "h")
 
     gamemode_text = {
-        "7s": f", {bot_user.mention} wins 7s",
-        "7s_ties": f", {bot_user.mention} wins 7s and ties",
+        "7s": f", {bot_user.mention} wins ALL 7s",
+        "7s_ties": f", {bot_user.mention} wins ALL 7s and ties",
         "ties": f", {bot_user.mention} wins ties",
         "fair": "",
     }.get(gamemode_key, "wins 7s")
