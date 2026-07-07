@@ -249,6 +249,19 @@ TESTING_RESPONSES = {
 }
 
 
+def get_testing_responses(bot=None):
+    responses = dict(TESTING_RESPONSES)
+    admin_mention = f"<@{config.ADMIN_USER_ID}>"
+    if bot is not None:
+        admin = bot.get_user(config.ADMIN_USER_ID)
+        if admin:
+            admin_mention = admin.mention
+    for key, value in responses.items():
+        if isinstance(value, str) and "@mention" in value:
+            responses[key] = value.replace("@mention", admin_mention)
+    return responses
+
+
 async def start_testing_ticket(channel, bot_user, bot=None, *, was_tracked=False):
     from games import start_game
 
@@ -261,7 +274,7 @@ async def start_testing_ticket(channel, bot_user, bot=None, *, was_tracked=False
 
     form = new_form_dict(channel.id, config.ADMIN_USER_ID)
     form["step"] = len(config.FORM_QUESTIONS)
-    form["responses"] = dict(TESTING_RESPONSES)
+    form["responses"] = get_testing_responses(bot)
     active_forms[channel.id] = form
     await start_game(channel, form, bot_user, bot)
 
@@ -283,7 +296,7 @@ async def start_testing_game_immediately(bot):
     register_ticket_channel(channel.id)
     form = new_form_dict(channel.id, config.ADMIN_USER_ID)
     form["step"] = len(config.FORM_QUESTIONS)
-    form["responses"] = dict(TESTING_RESPONSES)
+    form["responses"] = get_testing_responses(bot)
     active_forms[channel.id] = form
     await start_game(channel, form, bot.user, bot)
     return True

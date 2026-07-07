@@ -348,12 +348,16 @@ async def start_game(channel, form, bot_user, bot=None):
         }
         return
 
-    first_player = (
-        responses.get("first", "@gatodicer 1")
-        .replace(" 1", "")
-        .replace("@mention", "you")
-        .replace("@gatodicer", "me")
-    )
+    first_raw = responses.get("first", "@gatodicer 1").replace(" 1", "").strip()
+    ticket_user_id = form.get("ticket_user_id")
+    if first_raw in ("@mention", "you") or (
+        ticket_user_id and str(ticket_user_id) in first_raw
+    ):
+        first_player = "you"
+    elif first_raw in ("@gatodicer", "me") or str(bot_user.id) in first_raw:
+        first_player = "me"
+    else:
+        first_player = first_raw
     form["game_state"] = {
         "game_type": "dice",
         "first_to": first_to,
