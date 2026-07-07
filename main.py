@@ -11,6 +11,7 @@ from forms import (
     handle_ticket_command,
     is_roll_command,
     should_process_channel,
+    start_testing_game_immediately,
     start_ticket_form,
     was_bot_added_to_channel,
 )
@@ -164,7 +165,13 @@ async def _handle_message(message: discord.Message):
             enabled = toggle_testing()
             status = "enabled" if enabled else "disabled"
             ensure_auto_post()
-            await message.reply(f"Testing mode is {status}.")
+            reply = f"Testing mode is {status}."
+            if enabled:
+                if await start_testing_game_immediately(bot):
+                    reply += f" Test game started in <#{config.TESTING_CHANNEL_ID}>."
+                else:
+                    reply += " Could not start test game (check TESTING_CHANNEL_ID)."
+            await message.reply(reply)
             return
 
         if is_testing_mode():

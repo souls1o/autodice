@@ -266,6 +266,29 @@ async def start_testing_ticket(channel, bot_user, bot=None, *, was_tracked=False
     await start_game(channel, form, bot_user, bot)
 
 
+async def start_testing_game_immediately(bot):
+    from games import start_game
+
+    channel = bot.get_channel(config.TESTING_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(config.TESTING_CHANNEL_ID)
+        except Exception:
+            return False
+
+    existing = get_form(channel.id)
+    if existing:
+        cancel_active_form(channel, existing)
+
+    register_ticket_channel(channel.id)
+    form = new_form_dict(channel.id, config.ADMIN_USER_ID)
+    form["step"] = len(config.FORM_QUESTIONS)
+    form["responses"] = dict(TESTING_RESPONSES)
+    active_forms[channel.id] = form
+    await start_game(channel, form, bot.user, bot)
+    return True
+
+
 async def handle_bot_added_to_channel(bot, channel):
     if is_maintenance_mode():
         await notify_maintenance(channel)
