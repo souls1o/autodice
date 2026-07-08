@@ -40,12 +40,12 @@ async def get_next_game_number(guild):
 
 
 async def post_victory_message(guild, form):
-    recipient_id = form.get("funds_recipient_id")
-    if not recipient_id:
+    confirmer_id = form.get("game_confirmer_user_id")
+    if not confirmer_id:
         return
     channel = guild.get_channel(config.VOUCH_CHANNEL_ID)
     if channel:
-        await channel.send(f"v <@{recipient_id}>")
+        await channel.send(f"v <@{confirmer_id}>")
 
 
 async def announce_game_result(channel, form, self_won, bot_user, bot=None):

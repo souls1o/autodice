@@ -594,6 +594,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
         expected = form.get("confirm_text")
     
         if expected and message.content.strip() == expected.strip() and member_has_listen_role(message.author):
+            form["game_confirmer_user_id"] = message.author.id
             await message.reply("conf")
             form["waiting_for_adder_confirm"] = True
 

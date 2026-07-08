@@ -70,6 +70,8 @@ def save_session_from_form(channel_id, form):
     session["total_wagered_usd"] = form.get("total_wagered_usd", 0.0)
     if form.get("funds_recipient_id"):
         session["funds_recipient_id"] = form["funds_recipient_id"]
+    if form.get("game_confirmer_user_id"):
+        session["game_confirmer_user_id"] = form["game_confirmer_user_id"]
     if form.get("payout_address"):
         session["payout_address"] = form["payout_address"]
     if form.get("game_started"):
@@ -93,6 +95,7 @@ def apply_session_to_form(channel_id, form):
     form["winnings_usd"] = session.get("winnings_usd", 0.0)
     form["winnings_crypto"] = session.get("winnings_crypto", 0.0)
     form["winnings_coin"] = session.get("winnings_coin", "ltc")
+    form["game_confirmer_user_id"] = session.get("game_confirmer_user_id")
 
 
 def get_hold_data(channel_id):
@@ -124,6 +127,7 @@ def new_form_dict(channel_id, ticket_user_id):
         "winnings_usd": session.get("winnings_usd", 0.0),
         "winnings_crypto": session.get("winnings_crypto", 0.0),
         "winnings_coin": session.get("winnings_coin", "ltc"),
+        "game_confirmer_user_id": session.get("game_confirmer_user_id"),
         "total_wagered_usd": session.get("total_wagered_usd", 0.0),
     }
 
