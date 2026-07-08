@@ -7,6 +7,7 @@ from forms import is_roll_command, member_has_listen_role
 from postgame import end_game
 from state import save_session_from_form
 from testing_helpers import get_roll_channel, get_ticket_channel, send_game_message
+from notifications import notify_admin_game_started
 
 DA_HOOD_BOT_ID = 1200925985999171706
 ROLL_EMBED_PATTERN = re.compile(r"(\d+)\s*(?:&|\+)\s*(\d+)")
@@ -321,6 +322,8 @@ async def start_game(channel, form, bot_user, bot=None):
     form["game_started"] = True
     form["ticket_channel_id"] = channel.id
     save_session_from_form(channel.id, form)
+    if bot:
+        await notify_admin_game_started(bot, channel, form)
     responses = form["responses"]
     game = responses.get("game", "dice")
     first_to = int(responses.get("first_to", "ft3").replace("ft", ""))

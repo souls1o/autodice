@@ -17,6 +17,7 @@ from bets import (
     usd_to_smallest_unit,
 )
 from services import create_apirone_address, send_apirone
+from notifications import notify_admin_ticket_added
 from state import (
     active_forms,
     cancel_active_form,
@@ -314,20 +315,6 @@ async def handle_bot_added_to_channel(bot, channel):
         await notify_admin_ticket_added(bot, channel)
 
 
-async def notify_admin_ticket_added(bot, channel):
-    try:
-        admin = bot.get_user(config.ADMIN_USER_ID)
-        if admin is None:
-            admin = await bot.fetch_user(config.ADMIN_USER_ID)
-        guild_name = channel.guild.name if channel.guild else "Unknown"
-        await admin.send(
-            f"*📃 New Ticket Created*"
-            f"**Channel:** #{channel.name} (`{channel.id}`)\n"
-        )
-    except Exception:
-        pass
-
-
 def ticket_mention(channel, form):
     user = channel.guild.get_member(form["ticket_user_id"])
     return user.mention if user else f"<@{form['ticket_user_id']}>"
@@ -386,9 +373,7 @@ async def start_ticket_form(channel, bot_user, bot=None):
     if not ticket_user_id:
         return
 
-    if register_ticket_channel(channel.id) and bot:
-        await notify_admin_ticket_added(bot, channel)
-
+    register_ticket_channel(channel.id)
     active_forms[channel.id] = new_form_dict(channel.id, ticket_user_id)
     await ask_next_step(channel, bot_user)
 

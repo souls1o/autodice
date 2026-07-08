@@ -15,6 +15,7 @@ from bets import (
 )
 from testing_helpers import send_game_message
 from services import create_apirone_address, send_apirone, track_stats
+from notifications import notify_admin_game_result
 from state import cancel_rerun_timeout, finish_form, get_form, is_testing_mode, save_session_from_form
 
 RERUN_TIMEOUT_SECONDS = 180
@@ -103,6 +104,8 @@ async def payout_winnings_if_any(channel, form):
 async def end_game(channel, form, self_won, bot_user, bot=None):
     form.pop("game_state", None)
     await record_winnings(channel, form, self_won)
+    if bot:
+        await notify_admin_game_result(bot, channel, form, self_won)
     if not is_testing_mode():
         await track_stats(form, self_won)
         await post_victory_message(channel.guild, form)

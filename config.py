@@ -15,7 +15,7 @@ DB_NAME = os.getenv("DB_NAME", "gatodicer")
 ADMIN_USER_ID = 1200925985999171706
 
 AUTO_POST_CHANNEL_ID = 1523459736169877686
-AUTO_POST_INTERVAL = 120
+AUTO_POST_INTERVAL = 600
 
 # Channel scanned for the latest Game #<number> to increment after each game
 GAME_LOG_CHANNEL_ID = 1258789286388568134
