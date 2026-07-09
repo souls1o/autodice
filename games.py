@@ -12,7 +12,9 @@ DA_HOOD_BOT_ID = 1200925985999171706
 ROLL_EMBED_PATTERN = re.compile(r"(\d+)\s*(?:&|\+)\s*(\d+)")
 
 
-async def get_ticket_channel(bot, form):
+async def get_ticket_channel(bot, form, fallback=None):
+    if bot is None:
+        return fallback
     channel = bot.get_channel(form["ticket_channel_id"])
     if channel is None:
         channel = await bot.fetch_channel(form["ticket_channel_id"])
@@ -105,7 +107,7 @@ def _pair_winner(me_total, you_total, gamemode, roll_mode):
 async def _score_pair(roll_channel, form, bot_user, bot, me_total, you_total, *, continue_batch=False):
     state = form["game_state"]
     winner = _pair_winner(me_total, you_total, state["gamemode"], state["mode"])
-    ticket_channel = await get_ticket_channel(bot, form)
+    ticket_channel = await get_ticket_channel(bot, form, fallback=roll_channel)
 
     if winner == "me":
         state["self_score"] += 1
@@ -300,7 +302,7 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
     if house_flip == state["house_side"]:
         state["self_score"] += 1
 
-    ticket_channel = await get_ticket_channel(bot, form)
+    ticket_channel = await get_ticket_channel(bot, form, fallback=roll_channel)
     await ticket_channel.send(f"`{state['self_score']}-{state['adder_score']}`")
 
     first_to = state["first_to"]

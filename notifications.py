@@ -1,5 +1,6 @@
 import config
 from bets import format_bet_display, get_bet_info
+from services import get_house_balance_usd
 
 GAMEMODE_LABELS = {
     "7s": "I Win ALL 7s",
@@ -43,6 +44,7 @@ async def notify_admin_game_started(bot, channel, form):
         form.get("responses", {}).get("gamemode", "fair"),
     )
     coin_label = coin.upper()
+    profit_on_win = my_bet_usd - his_bet_usd
     await _send_admin_dm(
         bot,
         f"**🎮 Game Started**\n"
@@ -50,17 +52,19 @@ async def notify_admin_game_started(bot, channel, form):
         f"**Gamemode:** {gamemode}\n"
         f"**Your bet:** `${format_bet_display(my_bet_usd)}` {coin_label}\n"
         f"**Their bet:** `${format_bet_display(his_bet_usd)}` {coin_label}\n"
-        f"**Profit on win:** `${format_bet_display(his_bet_usd)}`",
+        f"**Profit on win:** `${format_bet_display(profit_on_win)}`",
     )
 
 
 async def notify_admin_game_result(bot, channel, form, self_won):
     outcome = "Win" if self_won else "Loss"
     emoji = "✅" if self_won else "❌"
-    balance = form.get("winnings_usd", 0.0)
+    house_balance = await get_house_balance_usd()
+    ticket_balance = form.get("winnings_usd", 0.0)
+    new_balance = house_balance + ticket_balance
     await _send_admin_dm(
         bot,
         f"**{emoji} Game {outcome}**\n"
         f"**Channel:** {_channel_label(channel)}\n"
-        f"**New balance:** `${balance:,.2f}`",
+        f"**New balance:** `${new_balance:,.2f}`",
     )

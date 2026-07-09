@@ -204,6 +204,26 @@ def _coin_balance_usd(coin, total_smallest):
     return crypto * get_price(coin)
 
 
+async def get_house_balance_usd():
+    data = await get_account_balance()
+    if not data:
+        return 0.0
+
+    balances = {
+        entry.get("currency", "").lower(): entry.get("total", 0)
+        for entry in data.get("balance", [])
+    }
+
+    total_usd = 0.0
+    for coin in HOUSE_COINS:
+        smallest = balances.get(coin, 0)
+        try:
+            total_usd += _coin_balance_usd(coin, smallest)
+        except Exception:
+            pass
+    return round(total_usd, 2)
+
+
 async def get_house_balance_text():
     data = await get_account_balance()
     if not data:

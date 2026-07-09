@@ -59,6 +59,7 @@ def build_dm_help_text(user_id):
         "**🎫 Ticket commands**",
         "`!ltc` / `!btc` / `!eth` — get a deposit address",
         "`!hold` — show current winnings for this ticket",
+        "`!rerun` — rerun the previous game in this ticket",
         "`!restart` — restart the bet form (only before funds are sent)",
         "`!cancel` — cancel and payout winnings if any",
     ]
@@ -407,6 +408,10 @@ async def handle_ticket_command(message, bot_user, bot=None):
         await handle_hold_command(message)
         return True
 
+    if content == "!rerun":
+        await handle_rerun_command(message, bot_user, bot)
+        return True
+
     if content == "!cancel":
         await handle_cancel_command(message, bot_user)
         return True
@@ -421,6 +426,19 @@ async def handle_hold_command(message):
         f"**USD:** `${winnings_usd:.2f}`\n"
         f"**{coin.upper()}:** `{winnings_crypto}`"
     )
+
+
+async def handle_rerun_command(message, bot_user, bot=None):
+    from postgame import process_rerun
+
+    channel = message.channel
+    form = get_form(channel.id)
+    if not form:
+        await channel.send("❌ No previous game to rerun.")
+        return
+
+    active_forms[channel.id] = form
+    await process_rerun(channel, form, bot_user, bot)
 
 
 async def handle_cancel_command(message, bot_user):
