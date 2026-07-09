@@ -3,7 +3,6 @@ import re
 
 import config
 from bets import (
-    add_winnings_usd,
     add_wagered_usd,
     format_bet_display,
     get_bet_info,
@@ -11,6 +10,7 @@ from bets import (
     get_wager_usd,
     subtract_winnings_usd,
     ticket_profit_usd,
+    usd_to_crypto_amount,
     usd_to_smallest_unit,
 )
 from notifications import notify_admin_game_result
@@ -20,6 +20,7 @@ from forms import build_confirm_text, ticket_mention
 
 RERUN_TIMEOUT_SECONDS = 180
 GAME_NUMBER_PATTERN = re.compile(r"#(\d+)")
+_cached_next_game_number = None
 
 
 def tip_amount(profit_usd):
@@ -28,7 +29,7 @@ def tip_amount(profit_usd):
     return round(profit_usd * 0.03, 2)
 
 
-async def get_next_game_number(guild, bot=None):
+async def _bootstrap_game_number(guild, bot=None):
     channel = guild.get_channel(config.GAME_LOG_CHANNEL_ID)
     if channel is None and bot is not None:
         try:
@@ -37,11 +38,20 @@ async def get_next_game_number(guild, bot=None):
             channel = None
     if channel is None:
         return 1
-    async for msg in channel.history(limit=200):
+    async for msg in channel.history(limit=15):
         match = GAME_NUMBER_PATTERN.search(msg.content or "")
         if match:
             return int(match.group(1)) + 1
     return 1
+
+
+async def get_next_game_number(guild, bot=None):
+    global _cached_next_game_number
+    if _cached_next_game_number is None:
+        _cached_next_game_number = await _bootstrap_game_number(guild, bot)
+    number = _cached_next_game_number
+    _cached_next_game_number += 1
+    return number
 
 
 async def _get_guild_channel(guild, channel_id, bot=None):
@@ -92,10 +102,39 @@ async def record_winnings(channel, form, self_won):
     form.setdefault("winnings_crypto", 0.0)
     form["winnings_coin"] = coin
     if self_won:
-        add_winnings_usd(form, my_bet_usd + his_bet_usd, coin)
+        amount = my_bet_usd + his_bet_usd
+        form["winnings_usd"] = round(form.get("winnings_usd", 0) + amount, 8)
+        try:
+            crypto_delta = await asyncio.to_thread(usd_to_crypto_amount, amount, coin)
+            form["winnings_crypto"] = round(form.get("winnings_crypto", 0) + crypto_delta, 8)
+        except Exception as exc:
+            print(f"[record_winnings] crypto conversion failed: {exc}")
     else:
-        subtract_winnings_usd(form, my_bet_usd, coin)
+        form["winnings_usd"] = round(form.get("winnings_usd", 0) - my_bet_usd, 8)
+        try:
+            crypto_delta = await asyncio.to_thread(usd_to_crypto_amount, my_bet_usd, coin)
+            form["winnings_crypto"] = round(form.get("winnings_crypto", 0) - crypto_delta, 8)
+        except Exception as exc:
+            print(f"[record_winnings] crypto conversion failed: {exc}")
     save_session_from_form(channel.id, form)
+
+
+async def _post_game_background(channel, form, self_won, bot_user, bot):
+    if bot:
+        try:
+            await notify_admin_game_result(bot, channel, form, self_won)
+        except Exception as exc:
+            print(f"[end_game] notify_admin_game_result failed: {exc}")
+
+    try:
+        await track_stats(form, self_won)
+    except Exception as exc:
+        print(f"[end_game] track_stats failed: {exc}")
+
+    try:
+        await post_victory_message(channel.guild, form, bot)
+    except Exception as exc:
+        print(f"[end_game] post_victory_message failed: {exc}")
 
 
 async def payout_winnings_if_any(channel, form):
@@ -121,22 +160,6 @@ async def end_game(channel, form, self_won, bot_user, bot=None):
     except Exception as exc:
         print(f"[end_game] record_winnings failed: {exc}")
 
-    if bot:
-        try:
-            await notify_admin_game_result(bot, channel, form, self_won)
-        except Exception as exc:
-            print(f"[end_game] notify_admin_game_result failed: {exc}")
-
-    try:
-        await track_stats(form, self_won)
-    except Exception as exc:
-        print(f"[end_game] track_stats failed: {exc}")
-
-    try:
-        await post_victory_message(channel.guild, form, bot)
-    except Exception as exc:
-        print(f"[end_game] post_victory_message failed: {exc}")
-
     try:
         await announce_game_result(channel, form, self_won, bot_user, bot)
     except Exception as exc:
@@ -148,6 +171,8 @@ async def end_game(channel, form, self_won, bot_user, bot=None):
     form["waiting_for_rerun"] = True
     form["rerun_timeout_task"] = asyncio.create_task(_rerun_timeout(channel))
     save_session_from_form(channel.id, form)
+
+    asyncio.create_task(_post_game_background(channel, form, self_won, bot_user, bot))
 
 
 async def _rerun_timeout(channel):

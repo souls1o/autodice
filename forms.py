@@ -27,6 +27,7 @@ from state import (
     get_hold_data,
     get_ticket_session,
     is_maintenance_mode,
+    is_ticket_channel,
     new_form_dict,
     notify_maintenance,
     register_ticket_channel,
@@ -208,9 +209,7 @@ def was_bot_added_to_channel(channel, bot_user, before=None):
 def should_process_channel(channel, message=None, bot_user=None):
     if is_channel_blacklisted(channel.id):
         return False
-    if channel.id in ticket_channels or channel.id in active_forms:
-        return True
-    if "ticket" in channel.name.lower():
+    if is_ticket_channel(channel):
         return True
     if message is not None and bot_user is not None and message_references_bot(message, bot_user):
         return True
