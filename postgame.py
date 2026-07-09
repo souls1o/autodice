@@ -38,7 +38,7 @@ async def _bootstrap_game_number(guild, bot=None):
             channel = None
     if channel is None:
         return 1
-    async for msg in channel.history(limit=15):
+    async for msg in channel.history(limit=10):
         match = GAME_NUMBER_PATTERN.search(msg.content or "")
         if match:
             return int(match.group(1)) + 1
