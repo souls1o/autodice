@@ -14,15 +14,12 @@ DB_NAME = os.getenv("DB_NAME", "gatodicer")
 
 ADMIN_USER_ID = 1200925985999171706
 
-AUTO_POST_CHANNEL_ID = 1523459736169877686
+AUTO_POST_CHANNEL_ID = 1524104505384501331
 AUTO_POST_INTERVAL = 600
 
 # Channel scanned for the latest Game #<number> to increment after each game
 GAME_LOG_CHANNEL_ID = 1258789286388568134
 VOUCH_CHANNEL_ID = 1258789148702146700
-
-# Dice rolls during testing mode happen here (selfbot vs admin only)
-TESTING_CHANNEL_ID = 1523459765613891726
 
 # Staff roles allowed to be recorded as the wager funds recipient
 FUNDS_RECIPIENT_ROLE_IDS = [
@@ -46,12 +43,12 @@ ROLL_HYPE_MESSAGES = [
 # Channels where ticket scanning / form start is ignored (e.g. general chat, auto-post)
 CHANNEL_BLACKLIST = [
     AUTO_POST_CHANNEL_ID,
-    1523459765613891726,
+    1524104505384501331,
     1258789148702146700
 ]
 
-AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2.5x Bet` / FT5 → `3.5x Bet`
-[<:Dices:1259259866254676049>] __I Win ALL 7's & Ties__ | FT3 → `3.5x Bet` / FT5 → `4x Bet`
+AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`
+[<:Dices:1259259866254676049>] __I Win ALL 7's & Ties__ | FT3 → `3x Bet` / FT5 → `3.5x Bet`
 [<:Dices:1259259866254676049>] __I Win Ties__ | FT3 → `10% MORE BET` / FT5 → `25% MORE Bet`
 [<:Dices:1259259866254676049>] __Fair__ | FT3/FT5 → `15%-10% LESS Bet`**
 > 🤖 **Make a Ticket - I'M AUTOMATED (MIN: __$1__ | MAX: __$200__)** <:BTC:1450767429465800878><:eth:1289062489363058708><:ltc:1259292428175806504>
@@ -75,8 +72,8 @@ FORM_QUESTIONS = [
     {
         "type": "choice",
         "text": """<:Dices:1259259866254676049> **Which gamemode would you like to play?**
-1. `I Win ALL 7's — FT3 → 2.5x | FT5 → 3.5x Bet`
-2. `I Win ALL 7's & Ties — FT3 → 3.5x | FT5 → 4x Bet`
+1. `I Win ALL 7's — FT3 → 2x | FT5 → 3x Bet`
+2. `I Win ALL 7's & Ties — FT3 → 3x | FT5 → 3.5x Bet`
 3. `I Win Ties — FT3 → 10% | FT5 → 25% MORE Bet`
 4. `Fair — 15%-10% LESS Bet`
 

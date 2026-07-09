@@ -3,15 +3,10 @@ ticket_channels = set()
 ticket_sessions = {}
 maintenance_mode = False
 maintenance_notified_channels = set()
-testing_mode = False
 
 
 def is_maintenance_mode():
     return maintenance_mode
-
-
-def is_testing_mode():
-    return testing_mode
 
 
 def toggle_maintenance():
@@ -20,12 +15,6 @@ def toggle_maintenance():
     if not maintenance_mode:
         maintenance_notified_channels.clear()
     return maintenance_mode
-
-
-def toggle_testing():
-    global testing_mode
-    testing_mode = not testing_mode
-    return testing_mode
 
 
 async def notify_maintenance(channel):

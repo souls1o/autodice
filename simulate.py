@@ -27,12 +27,12 @@ GAME_MODES = [
     GameMode("FT3 House Wins Ties", 0.6047, 1.10),
     GameMode("FT5 House Wins Ties", 0.6363, 1.30),
 
-    GameMode("FT3 House Wins 7s", 0.7905, 2.50),
-    GameMode("FT5 House Wins 7s", 0.8556, 3.50),
+    GameMode("FT3 House Wins 7s", 0.7905, 2.00),
+    GameMode("FT5 House Wins 7s", 0.8556, 3.00),
 
     # Approximate values
-    GameMode("FT3 House Wins 7s + Ties", 0.8500, 3.50),
-    GameMode("FT5 House Wins 7s + Ties", 0.9100, 4.00),
+    GameMode("FT3 House Wins 7s + Ties", 0.8500, 3.00),
+    GameMode("FT5 House Wins 7s + Ties", 0.9100, 3.50),
 ]
 
 # ==========================================

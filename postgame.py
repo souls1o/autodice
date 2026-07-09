@@ -13,10 +13,10 @@ from bets import (
     ticket_profit_usd,
     usd_to_smallest_unit,
 )
-from testing_helpers import send_game_message
-from services import create_apirone_address, send_apirone, track_stats
 from notifications import notify_admin_game_result
-from state import cancel_rerun_timeout, finish_form, get_form, is_testing_mode, save_session_from_form
+from services import create_apirone_address, send_apirone, track_stats
+from state import cancel_rerun_timeout, finish_form, get_form, save_session_from_form
+from forms import build_confirm_text, ticket_mention
 
 RERUN_TIMEOUT_SECONDS = 180
 GAME_NUMBER_PATTERN = re.compile(r"#(\d+)")
@@ -68,10 +68,7 @@ async def announce_game_result(channel, form, self_won, bot_user, bot=None):
         f"{winner} overtakes {loser}\n"
         f"{winner_bet}v{loser_bet}"
     )
-    if bot:
-        await send_game_message(bot, channel, text)
-    else:
-        await channel.send(text)
+    await channel.send(text)
 
 
 async def record_winnings(channel, form, self_won):
@@ -106,19 +103,12 @@ async def end_game(channel, form, self_won, bot_user, bot=None):
     await record_winnings(channel, form, self_won)
     if bot:
         await notify_admin_game_result(bot, channel, form, self_won)
-    if not is_testing_mode():
-        await track_stats(form, self_won)
-        await post_victory_message(channel.guild, form)
-    if bot:
-        await announce_game_result(channel, form, self_won, bot_user, bot)
-    else:
-        await announce_game_result(channel, form, self_won, bot_user)
+    await track_stats(form, self_won)
+    await post_victory_message(channel.guild, form)
+    await announce_game_result(channel, form, self_won, bot_user, bot)
     mention = ticket_mention(channel, form)
     rerun_text = f"{mention} Do you want to rerun? (yes/no)"
-    if bot:
-        await send_game_message(bot, channel, rerun_text)
-    else:
-        await channel.send(rerun_text)
+    await channel.send(rerun_text)
     form["waiting_for_rerun"] = True
     form["rerun_timeout_task"] = asyncio.create_task(_rerun_timeout(channel))
 

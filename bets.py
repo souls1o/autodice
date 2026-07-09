@@ -88,11 +88,11 @@ def calculate_my_bet(form):
 
     gamemode = responses.get("gamemode")
     if gamemode == "7s" and first_to == "ft3":
-        return round(his_bet * 2.5, 2)
+        return round(his_bet * 2, 2)
     if (gamemode == "7s" and first_to == "ft5") or (gamemode == "7s_ties" and first_to == "ft3"):
-        return round(his_bet * 3.5, 2)
+        return round(his_bet * 3, 2)
     if gamemode == "7s_ties" and first_to == "ft5":
-        return round(his_bet * 4, 2)
+        return round(his_bet * 3.5, 2)
     if gamemode == "ties" and first_to == "ft3":
         return round(his_bet * 1.1, 2)
     if gamemode == "ties" and first_to == "ft5":

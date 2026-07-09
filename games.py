@@ -6,11 +6,17 @@ import config
 from forms import is_roll_command, member_has_listen_role
 from postgame import end_game
 from state import save_session_from_form
-from testing_helpers import get_roll_channel, get_ticket_channel, send_game_message
 from notifications import notify_admin_game_started
 
 DA_HOOD_BOT_ID = 1200925985999171706
 ROLL_EMBED_PATTERN = re.compile(r"(\d+)\s*(?:&|\+)\s*(\d+)")
+
+
+async def get_ticket_channel(bot, form):
+    channel = bot.get_channel(form["ticket_channel_id"])
+    if channel is None:
+        channel = await bot.fetch_channel(form["ticket_channel_id"])
+    return channel
 
 
 def is_bot_turn(state):
@@ -106,13 +112,13 @@ async def _score_pair(roll_channel, form, bot_user, bot, me_total, you_total, *,
     elif winner == "you":
         state["adder_score"] += 1
 
-    await send_game_message(bot, ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
+    await ticket_channel.send(f"`{state['self_score']}-{state['adder_score']}`")
 
     first_to = state["first_to"]
     if state["self_score"] >= first_to or state["adder_score"] >= first_to:
         self_won = state["self_score"] >= first_to
         winner_id = bot_user.id if self_won else form["ticket_user_id"]
-        await send_game_message(bot, ticket_channel, f"<@{winner_id}> won!")
+        await ticket_channel.send(f"<@{winner_id}> won!")
         await end_game(ticket_channel, form, self_won, bot_user, bot)
         return True
 
@@ -295,13 +301,13 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
         state["self_score"] += 1
 
     ticket_channel = await get_ticket_channel(bot, form)
-    await send_game_message(bot, ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
+    await ticket_channel.send(f"`{state['self_score']}-{state['adder_score']}`")
 
     first_to = state["first_to"]
     if state["self_score"] >= first_to or state["adder_score"] >= first_to:
         self_won = state["self_score"] >= first_to
         winner_id = bot_user.id if self_won else form["ticket_user_id"]
-        await send_game_message(bot, ticket_channel, f"<@{winner_id}> won!")
+        await ticket_channel.send(f"<@{winner_id}> won!")
         await end_game(ticket_channel, form, self_won, bot_user, bot)
         return
 
@@ -380,5 +386,5 @@ async def start_game(channel, form, bot_user, bot=None):
         "pending_user_embeds": 0,
         "bot_rolls_remaining": 0,
     }
-    roll_channel = await get_roll_channel(bot, channel) if bot else channel
+    roll_channel = await get_ticket_channel(bot, form) if bot else channel
     await do_next_roll(roll_channel, form, bot_user, bot)

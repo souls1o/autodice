@@ -11,23 +11,17 @@ from forms import (
     handle_ticket_command,
     is_roll_command,
     should_process_channel,
-    start_testing_game_immediately,
     start_ticket_form,
     was_bot_added_to_channel,
 )
 from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, start_game
 from services import get_house_balance_text, build_stats_text, get_wallets
-from state import active_forms, clear_ticket_session, get_form, is_maintenance_mode, is_testing_mode, is_ticket_channel, toggle_maintenance, toggle_testing
-from testing_helpers import get_active_game_form, is_testing_roll_channel
+from state import active_forms, clear_ticket_session, get_form, is_maintenance_mode, is_ticket_channel, toggle_maintenance
 
 bot = commands.Bot(command_prefix="!", self_bot=True)
 
 
 def ensure_auto_post():
-    if is_testing_mode():
-        if auto_post.is_running():
-            auto_post.stop()
-        return
     if auto_post.is_running():
         return
     auto_post.start()
@@ -56,7 +50,7 @@ async def on_resumed():
 @tasks.loop(seconds=config.AUTO_POST_INTERVAL)
 async def auto_post():
     try:
-        if is_maintenance_mode() or is_testing_mode():
+        if is_maintenance_mode():
             return
         channel = bot.get_channel(config.AUTO_POST_CHANNEL_ID)
         if channel is None:
@@ -82,7 +76,7 @@ async def auto_post_error(exc):
 
 @tasks.loop(minutes=2)
 async def watchdog():
-    if not bot.is_ready() or is_testing_mode():
+    if not bot.is_ready():
         return
     if not auto_post.is_running():
         print("[watchdog] auto_post stopped — restarting")
@@ -151,49 +145,8 @@ async def _handle_message(message: discord.Message):
             status = "enabled" if enabled else "disabled"
             await message.reply(f"Maintenance mode is {status}.")
             return
-        if message.content.strip().lower() == "!toggle testing" and message.author.id == config.ADMIN_USER_ID:
-            enabled = toggle_testing()
-            status = "enabled" if enabled else "disabled"
-            ensure_auto_post()
-            reply = f"Testing mode is {status}."
-            if enabled:
-                if await start_testing_game_immediately(bot):
-                    reply += f" Test game started in <#{config.TESTING_CHANNEL_ID}>."
-                else:
-                    reply += " Could not start test game (check TESTING_CHANNEL_ID)."
-            await message.reply(reply)
-            return
-
-        if is_testing_mode():
-            form = get_active_game_form()
-            if form and form.get("waiting_for_rerun") and message.author.id == config.ADMIN_USER_ID:
-                from postgame import handle_rerun_response
-                await handle_rerun_response(message, form, bot.user, start_game, bot)
-                return
 
     if not isinstance(message.channel, discord.TextChannel):
-        return
-
-    if is_testing_roll_channel(message.channel.id):
-        form = get_active_game_form()
-        if not form or message.author.id not in (config.ADMIN_USER_ID, bot.user.id):
-            return
-        if is_roll_command(message.content) and form.get("game_state", {}).get("game_type") == "dice":
-            if message.author.id == config.ADMIN_USER_ID:
-                await handle_user_roll(message, form, bot.user)
-            return
-        if form.get("game_state"):
-            state = form["game_state"]
-            if state.get("game_type") == "dice" and message.author.bot and (
-                state.get("waiting_for_embed")
-                or state.get("pending_bot_total") is not None
-                or state.get("awaiting_user_after_bot")
-            ):
-                await handle_da_hood_message(message, form, bot.user, bot)
-                return
-            if message.author.id == DA_HOOD_BOT_ID:
-                await handle_da_hood_message(message, form, bot.user, bot)
-                return
         return
 
     if not should_process_channel(message.channel, message, bot.user):
@@ -206,16 +159,12 @@ async def _handle_message(message: discord.Message):
     channel_id = message.channel.id
     form = get_form(channel_id)
 
-    if is_testing_mode() and form and form.get("game_state"):
-        if is_roll_command(message.content):
-            return
-
     if is_roll_command(message.content) and form and form.get("game_state", {}).get("game_type") == "dice":
         if message.author.id == form["ticket_user_id"]:
             await handle_user_roll(message, form, bot.user)
         return
 
-    if form and "game_state" in form and not is_testing_mode():
+    if form and "game_state" in form:
         state = form["game_state"]
         if state.get("game_type") == "dice" and message.author.bot and (
             state.get("waiting_for_embed")

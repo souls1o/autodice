@@ -27,7 +27,6 @@ from state import (
     get_hold_data,
     get_ticket_session,
     is_maintenance_mode,
-    is_testing_mode,
     new_form_dict,
     notify_maintenance,
     register_ticket_channel,
@@ -40,8 +39,8 @@ VALIDATORS = {"bet_validator": bet_validator}
 COIN_ADDRESS_COMMANDS = {"!ltc": "ltc", "!btc": "btc", "!eth": "eth"}
 
 DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
-1. **I Win ALL 7's** — FT3 → 2.5x | FT5 → 3.5x Bet
-2. **I Win ALL 7's & Ties** — FT3 → 3.5x | FT5 → 4x Bet
+1. **I Win ALL 7's** — FT3 → 2x | FT5 → 3x Bet
+2. **I Win ALL 7's & Ties** — FT3 → 3x | FT5 → 3.5x Bet
 3. **I Win Ties** — FT3 → 10% MORE | FT5 → 25% MORE Bet
 4. **Fair** — 15% LESS Bet"""
 
@@ -70,7 +69,6 @@ def build_dm_help_text(user_id):
             "`!stats` — wagered, profit, games, and house balance",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
-            "`!toggle testing` — skip form, auto-start test game",
         ])
     return "\n".join(lines)
 
@@ -240,76 +238,9 @@ async def resolve_ticket_user_id(channel, bot_user, *, was_tracked=False):
     return ticket_user_id
 
 
-TESTING_RESPONSES = {
-    "game": "dice",
-    "gamemode": "7s",
-    "first_to": "ft3",
-    "first": "@mention 1",
-    "mode": "normal",
-    "bet": "1 ltc",
-}
-
-
-def get_testing_responses(bot=None):
-    responses = dict(TESTING_RESPONSES)
-    admin_mention = f"<@{config.ADMIN_USER_ID}>"
-    if bot is not None:
-        admin = bot.get_user(config.ADMIN_USER_ID)
-        if admin:
-            admin_mention = admin.mention
-    for key, value in responses.items():
-        if isinstance(value, str) and "@mention" in value:
-            responses[key] = value.replace("@mention", admin_mention)
-    return responses
-
-
-async def start_testing_ticket(channel, bot_user, bot=None, *, was_tracked=False):
-    from games import start_game
-
-    if is_channel_blacklisted(channel.id):
-        return
-    if get_form(channel.id):
-        return
-
-    register_ticket_channel(channel.id)
-
-    form = new_form_dict(channel.id, config.ADMIN_USER_ID)
-    form["step"] = len(config.FORM_QUESTIONS)
-    form["responses"] = get_testing_responses(bot)
-    active_forms[channel.id] = form
-    await start_game(channel, form, bot_user, bot)
-
-
-async def start_testing_game_immediately(bot):
-    from games import start_game
-
-    channel = bot.get_channel(config.TESTING_CHANNEL_ID)
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(config.TESTING_CHANNEL_ID)
-        except Exception:
-            return False
-
-    existing = get_form(channel.id)
-    if existing:
-        cancel_active_form(channel, existing)
-
-    register_ticket_channel(channel.id)
-    form = new_form_dict(channel.id, config.ADMIN_USER_ID)
-    form["step"] = len(config.FORM_QUESTIONS)
-    form["responses"] = get_testing_responses(bot)
-    active_forms[channel.id] = form
-    await start_game(channel, form, bot.user, bot)
-    return True
-
-
 async def handle_bot_added_to_channel(bot, channel):
     if is_maintenance_mode():
         await notify_maintenance(channel)
-        return
-    if is_testing_mode():
-        if register_ticket_channel(channel.id):
-            await start_testing_ticket(channel, bot.user, bot, was_tracked=True)
         return
     if register_ticket_channel(channel.id):
         await notify_admin_ticket_added(bot, channel)
@@ -360,10 +291,6 @@ async def start_ticket_form(channel, bot_user, bot=None):
 
     if is_maintenance_mode():
         await notify_maintenance(channel)
-        return
-
-    if is_testing_mode():
-        await start_testing_ticket(channel, bot_user, bot, was_tracked=was_tracked)
         return
 
     if not channel_can_send(channel):
