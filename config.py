@@ -44,7 +44,7 @@ ROLL_HYPE_MESSAGES = [
 # Channels where ticket scanning / form start is ignored (e.g. general chat, auto-post)
 CHANNEL_BLACKLIST = [
     AUTO_POST_CHANNEL_ID,
-    1258789148702146700,
+    1524789293607026879,
 ]
 
 AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`
