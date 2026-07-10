@@ -233,7 +233,7 @@ async def _handle_message(message: discord.Message):
             return
 
     form = get_form(channel_id)
-    if form and not form.get("game_state") and not form.get("waiting_for_rerun") and not form.get("waiting_for_confirm"):
+    if form and not form.get("game_state") and not form.get("waiting_for_rerun") and not form.get("waiting_for_rerun_bet") and not form.get("waiting_for_confirm"):
         await handle_form_step(message, form, bot.user)
 
     if channel_id not in active_forms:

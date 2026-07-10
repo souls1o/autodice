@@ -107,16 +107,20 @@ def apply_session_to_form(channel_id, form):
 
 
 def get_hold_data(channel_id):
+    from bets import get_ticket_hold_usd, sync_winnings_crypto
+
     form = active_forms.get(channel_id)
     if form:
+        sync_winnings_crypto(form)
         return (
-            form.get("winnings_usd", 0.0),
+            get_ticket_hold_usd(form),
             form.get("winnings_crypto", 0.0),
             form.get("winnings_coin", "ltc"),
         )
     session = get_ticket_session(channel_id)
+    hold_usd = max(round(float(session.get("winnings_usd", 0.0)), 2), 0.0)
     return (
-        session.get("winnings_usd", 0.0),
+        hold_usd,
         session.get("winnings_crypto", 0.0),
         session.get("winnings_coin", "ltc"),
     )

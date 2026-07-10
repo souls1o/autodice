@@ -60,7 +60,7 @@ def build_dm_help_text(user_id):
         "**🎫 Ticket commands**",
         "`!ltc` / `!btc` / `!eth` — get a deposit address",
         "`!hold` — show current winnings for this ticket",
-        "`!rerun` — rerun the previous game in this ticket",
+        "`!rerun` — rerun with a new bet amount",
         "`!restart` — restart the bet form (only before funds are sent)",
         "`!cancel` — cancel and payout winnings if any",
     ]
@@ -422,7 +422,7 @@ async def handle_hold_command(message):
     winnings_usd, winnings_crypto, coin = get_hold_data(message.channel.id)
     await message.channel.send(
         f"**Hold for this ticket**\n"
-        f"**USD:** `${winnings_usd:.2f}`\n"
+        f"**Winnings:** `${winnings_usd:.2f}`\n"
         f"**{coin.upper()}:** `{winnings_crypto}`"
     )
 
@@ -459,6 +459,7 @@ async def handle_cancel_command(message, bot_user):
     cancel_rerun_timeout(form)
     form.pop("game_state", None)
     form["waiting_for_rerun"] = False
+    form["waiting_for_rerun_bet"] = False
     form["waiting_for_confirm"] = False
     form["waiting_for_address"] = False
     form["waiting_for_adder_confirm"] = False
@@ -501,6 +502,15 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
         await handle_rerun_response(message, form, bot_user, start_game_fn, bot)
         if message.channel.id not in active_forms:
             return
+
+    form = get_form(message.channel.id)
+    if not form:
+        return
+
+    if form.get("waiting_for_rerun_bet"):
+        from postgame import handle_rerun_bet_response
+        await handle_rerun_bet_response(message, form, bot_user, bot)
+        return
 
     form = get_form(message.channel.id)
     if not form:

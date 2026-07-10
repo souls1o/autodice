@@ -164,8 +164,28 @@ def add_winnings_usd(form, usd, coin):
 
 
 def subtract_winnings_usd(form, usd, coin):
-    form["winnings_usd"] = round(form.get("winnings_usd", 0) - usd, 8)
-    form["winnings_crypto"] = round(form.get("winnings_crypto", 0) - usd_to_crypto_amount(usd, coin), 8)
+    deducted = min(float(usd), max(form.get("winnings_usd", 0), 0))
+    if deducted <= 0:
+        return 0.0
+    form["winnings_usd"] = round(form.get("winnings_usd", 0) - deducted, 8)
+    form["winnings_crypto"] = round(
+        form.get("winnings_crypto", 0) - usd_to_crypto_amount(deducted, coin),
+        8,
+    )
+    return deducted
+
+
+def sync_winnings_crypto(form):
+    coin = form.get("winnings_coin", "ltc")
+    usd = max(form.get("winnings_usd", 0), 0)
+    try:
+        form["winnings_crypto"] = round(usd_to_crypto_amount(usd, coin), 8)
+    except Exception:
+        pass
+
+
+def get_ticket_hold_usd(form):
+    return max(round(float(form.get("winnings_usd", 0)), 2), 0.0)
 
 
 def bet_validator(response, form=None):
