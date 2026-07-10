@@ -15,6 +15,7 @@ from forms import (
     was_bot_added_to_channel,
 )
 from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, start_game
+from message_queue import reply_message, send_channel, start_send_worker
 from services import get_house_balance_text, build_stats_text, get_wallets
 from state import (
     active_forms,
@@ -69,14 +70,14 @@ async def send_auto_post():
         return
 
     try:
-        await channel.send(config.AUTO_POST_MESSAGE)
+        await send_channel(channel, config.AUTO_POST_MESSAGE)
         return
     except (discord.NotFound, discord.Forbidden):
         channel = await resolve_auto_post_channel(force_search=True)
         if channel is None:
             print(f"[auto_post] cannot post — #{config.AUTO_POST_CHANNEL_NAME} not found")
             return
-        await channel.send(config.AUTO_POST_MESSAGE)
+        await send_channel(channel, config.AUTO_POST_MESSAGE)
 
 
 def ensure_auto_post():
@@ -89,6 +90,7 @@ def ensure_auto_post():
 @bot.event
 async def on_ready():
     print(f"✅ Selfbot logged in as {bot.user} (ID: {bot.user.id})")
+    start_send_worker()
     ensure_auto_post()
     if not watchdog.is_running():
         watchdog.start()
@@ -176,29 +178,29 @@ async def _handle_message(message: discord.Message):
         content = message.content.strip().lower()
 
         if content == "!help":
-            await message.reply(build_dm_help_text(message.author.id))
+            await reply_message(message, build_dm_help_text(message.author.id))
             return
         if content == "!gamemodes":
-            await message.reply(build_dm_gamemodes_text())
+            await reply_message(message, build_dm_gamemodes_text())
             return
         if content == "!housebal":
-            await message.reply(await get_house_balance_text())
+            await reply_message(message, await get_house_balance_text())
             return
 
         if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
-            await message.reply(await build_stats_text())
+            await reply_message(message, await build_stats_text())
             return
         if message.content == "!wallet" and message.author.id == config.ADMIN_USER_ID:
             wallets = await get_wallets()
             lines = ["**Wallets:**"]
             for w in wallets.get("wallets", []):
                 lines.append(f"**{w['currency'].upper()}:** `{w['address']}` | Balance: {w.get('balance', 0)}")
-            await message.reply("\n".join(lines))
+            await reply_message(message, "\n".join(lines))
             return
         if message.content.strip().lower() == "!toggle maintenance" and message.author.id == config.ADMIN_USER_ID:
             enabled = toggle_maintenance()
             status = "enabled" if enabled else "disabled"
-            await message.reply(f"Maintenance mode is {status}.")
+            await reply_message(message, f"Maintenance mode is {status}.")
             return
 
     if not isinstance(message.channel, discord.TextChannel):

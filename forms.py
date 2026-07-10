@@ -18,6 +18,7 @@ from bets import (
 )
 from services import create_apirone_address, send_apirone
 from notifications import notify_admin_ticket_added
+from message_queue import reply_message, send_channel
 from state import (
     active_forms,
     cancel_active_form,
@@ -92,7 +93,7 @@ async def safe_channel_send(channel, content, *, form=None):
             finish_form(channel, form)
         return None
     try:
-        return await channel.send(content)
+        return await send_channel(channel, content)
     except discord.Forbidden:
         print(f"[forbidden] cannot send in #{getattr(channel, 'name', '?')} ({channel.id})")
         if form is not None:
@@ -379,7 +380,7 @@ async def handle_form_step(message, form, bot_user):
     if q["type"] == "open":
         validator = VALIDATORS.get(q.get("validator"))
         if validator and not validator(response, form):
-            await message.reply("❌ Invalid format or out of range.")
+            await reply_message(message, "❌ Invalid format or out of range.")
             return
         if q.get("short_key"):
             form["responses"][q["short_key"]] = response
@@ -394,9 +395,9 @@ async def handle_ticket_command(message, bot_user, bot=None):
         coin = COIN_ADDRESS_COMMANDS[content]
         address = await create_apirone_address(coin)
         if address:
-            await message.channel.send(f"`{address}`")
+            await send_channel(message.channel, f"`{address}`")
         else:
-            await message.channel.send(f"❌ Failed to generate {coin.upper()} address.")
+            await send_channel(message.channel, f"❌ Failed to generate {coin.upper()} address.")
         return True
 
     if content == "!restart":
@@ -420,10 +421,11 @@ async def handle_ticket_command(message, bot_user, bot=None):
 
 async def handle_hold_command(message):
     winnings_usd, winnings_crypto, coin = get_hold_data(message.channel.id)
-    await message.channel.send(
+    await send_channel(
+        message.channel,
         f"**Hold for this ticket**\n"
         f"**Winnings:** `${winnings_usd:.2f}`\n"
-        f"**{coin.upper()}:** `{winnings_crypto}`"
+        f"**{coin.upper()}:** `{winnings_crypto}`",
     )
 
 
@@ -433,7 +435,7 @@ async def handle_rerun_command(message, bot_user, bot=None):
     channel = message.channel
     form = get_form(channel.id)
     if not form:
-        await channel.send("❌ No previous game to rerun.")
+        await send_channel(channel, "❌ No previous game to rerun.")
         return
 
     active_forms[channel.id] = form
@@ -444,13 +446,13 @@ async def handle_cancel_command(message, bot_user):
     channel = message.channel
     form = get_form(channel.id)
     if form and (form.get("game_started") or form.get("game_state")):
-        await channel.send("❌ Cannot cancel — game has already started.")
+        await send_channel(channel, "❌ Cannot cancel — game has already started.")
         return
 
     if not form:
         session = get_ticket_session(channel.id)
         if not session.get("ticket_user_id") and session.get("winnings_usd", 0) <= 0:
-            await channel.send("❌ No active ticket to cancel.")
+            await send_channel(channel, "❌ No active ticket to cancel.")
             return
         form = new_form_dict(channel.id, session.get("ticket_user_id"))
 
@@ -458,6 +460,7 @@ async def handle_cancel_command(message, bot_user):
 
     cancel_rerun_timeout(form)
     form.pop("game_state", None)
+    form.pop("pending_rerun_fund", None)
     form["waiting_for_rerun"] = False
     form["waiting_for_rerun_bet"] = False
     form["waiting_for_confirm"] = False
@@ -470,9 +473,9 @@ async def handle_cancel_command(message, bot_user):
         _, _, coin = get_bet_info(form)
         refund_address = await create_apirone_address(coin)
         if refund_address:
-            await channel.send(f"`{refund_address}`")
+            await send_channel(channel, f"`{refund_address}`")
         else:
-            await channel.send(f"❌ Failed to generate {coin.upper()} refund address.")
+            await send_channel(channel, f"❌ Failed to generate {coin.upper()} refund address.")
 
     active_forms[channel.id] = form
     await payout_winnings_if_any(channel, form)
@@ -482,7 +485,7 @@ async def handle_restart_command(message, bot_user, bot=None):
     channel = message.channel
     form = get_form(channel.id)
     if form and form.get("payout_address"):
-        await channel.send("❌ Cannot restart — funds have already been sent.")
+        await send_channel(channel, "❌ Cannot restart — funds have already been sent.")
         return
 
     if form:
@@ -522,8 +525,9 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
         if address:
             recipient_id = await resolve_funds_recipient(message.channel, message)
             if not recipient_id:
-                await message.channel.send(
-                    "❌ Could not verify funds recipient — a staff member with the required role must post the address."
+                await send_channel(
+                    message.channel,
+                    "❌ Could not verify funds recipient — a staff member with the required role must post the address.",
                 )
                 return
             wager_usd = get_wager_usd(form)
@@ -531,8 +535,9 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             result = await send_apirone(coin, address, amount)
             if "error" in result:
                 err = result["error"]
-                await message.channel.send(
-                    f"❌ Transfer failed: {err if isinstance(err, str) else err}"
+                await send_channel(
+                    message.channel,
+                    f"❌ Transfer failed: {err if isinstance(err, str) else err}",
                 )
                 return
             form["waiting_for_address"] = False
@@ -540,7 +545,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             form["funds_recipient_id"] = recipient_id
             add_wagered_usd(form, wager_usd)
             save_session_from_form(message.channel.id, form)
-            await message.channel.send(f"📤 Sent `${wager_usd}` {coin.upper()} to `{address}`")
+            await send_channel(message.channel, f"📤 Sent `${wager_usd}` {coin.upper()} to `{address}`")
             form["step"] += 1
             await ask_next_step(message.channel, bot_user)
 
@@ -549,7 +554,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
     
         if expected and message.content.strip() == expected.strip() and member_has_listen_role(message.author):
             form["game_confirmer_user_id"] = message.author.id
-            await message.reply("conf")
+            await reply_message(message, "conf")
             form["waiting_for_adder_confirm"] = True
 
         if (

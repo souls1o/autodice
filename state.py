@@ -1,4 +1,5 @@
 import config
+from message_queue import send_channel
 
 active_forms = {}
 ticket_channels = set()
@@ -41,7 +42,7 @@ async def notify_maintenance(channel):
         return
     maintenance_notified_channels.add(channel.id)
     try:
-        await channel.send("🚧 **MAINTENANCE MODE IS ENABLED** 🚧")
+        await send_channel(channel, "🚧 **MAINTENANCE MODE IS ENABLED** 🚧")
     except Exception:
         maintenance_notified_channels.discard(channel.id)
 

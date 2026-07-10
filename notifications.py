@@ -1,5 +1,6 @@
 import config
 from bets import format_bet_display, get_bet_info
+from message_queue import send_user
 from services import get_house_balance_usd
 
 GAMEMODE_LABELS = {
@@ -15,7 +16,7 @@ async def _send_admin_dm(bot, content):
         admin = bot.get_user(config.ADMIN_USER_ID)
         if admin is None:
             admin = await bot.fetch_user(config.ADMIN_USER_ID)
-        await admin.send(content)
+        await send_user(admin, content)
     except Exception:
         pass
 

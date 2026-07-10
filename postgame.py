@@ -21,6 +21,7 @@ from notifications import notify_admin_game_result
 from services import create_apirone_address, send_apirone, track_stats
 from state import cancel_rerun_timeout, finish_form, get_form, save_session_from_form
 from forms import build_confirm_text, ticket_mention
+from message_queue import reply_message, send_channel
 
 RERUN_TIMEOUT_SECONDS = 180
 GAME_NUMBER_PATTERN = re.compile(r"Game #(\d+)", re.IGNORECASE)
@@ -81,7 +82,7 @@ async def post_victory_message(guild, form, bot=None):
         return
     channel = await _get_guild_channel(guild, config.VOUCH_CHANNEL_ID, bot)
     if channel:
-        await channel.send(f"v <@{confirmer_id}>")
+        await send_channel(channel, f"v <@{confirmer_id}>")
 
 
 async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=None):
@@ -104,7 +105,7 @@ async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=Non
         f"{winner} overtakes {loser}\n"
         f"{winner_bet}v{loser_bet}"
     )
-    await ticket_channel.send(text)
+    await send_channel(ticket_channel, text)
 
 
 async def record_winnings(channel, form, self_won):
@@ -149,7 +150,7 @@ async def fund_rerun_wager(channel, form):
             if deducted > 0:
                 add_winnings_usd(form, deducted, coin)
                 sync_winnings_crypto(form)
-            await channel.send("❌ No payout address on file for rerun.")
+            await send_channel(channel, "❌ No payout address on file for rerun.")
             return False
         try:
             amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
@@ -158,7 +159,7 @@ async def fund_rerun_wager(channel, form):
             if deducted > 0:
                 add_winnings_usd(form, deducted, coin)
                 sync_winnings_crypto(form)
-            await channel.send("❌ Could not price rerun top-up.")
+            await send_channel(channel, "❌ Could not price rerun top-up.")
             return False
         result = await send_apirone(coin, address, amount)
         if "error" in result:
@@ -166,10 +167,11 @@ async def fund_rerun_wager(channel, form):
             if deducted > 0:
                 add_winnings_usd(form, deducted, coin)
                 sync_winnings_crypto(form)
-            await channel.send(f"❌ Rerun transfer failed: {err if isinstance(err, str) else err}")
+            await send_channel(channel, f"❌ Rerun transfer failed: {err if isinstance(err, str) else err}")
             return False
-        await channel.send(
-            f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun"
+        await send_channel(
+            channel,
+            f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun",
         )
 
     form["stake_from_hold"] = deducted > 0
@@ -206,9 +208,9 @@ async def payout_winnings_if_any(channel, form):
         if address:
             tip = tip_amount(ticket_profit_usd(form))
             tip_line = f" (*YOUR TIP*: `${tip}`)" if tip > 0 else ""
-            await channel.send(f"`{address}`{tip_line}")
+            await send_channel(channel, f"`{address}`{tip_line}")
         else:
-            await channel.send(f"❌ Failed to generate {coin.upper()} address.")
+            await send_channel(channel, f"❌ Failed to generate {coin.upper()} address.")
     finish_form(channel, form, payout=True)
 
 
@@ -227,7 +229,7 @@ async def end_game(channel, form, self_won, bot_user, bot=None):
 
     mention = ticket_mention(channel, form)
     rerun_text = f"{mention} Do you want to rerun? (yes/no)"
-    await channel.send(rerun_text)
+    await send_channel(channel, rerun_text)
     form["waiting_for_rerun"] = True
     form["rerun_timeout_task"] = asyncio.create_task(_rerun_timeout(channel))
     save_session_from_form(channel.id, form)
@@ -249,11 +251,11 @@ async def _rerun_timeout(channel):
 
 async def prompt_rerun_bet(channel, form, bot_user):
     if form.get("game_state"):
-        await channel.send("❌ Cannot rerun — a game is currently in progress.")
+        await send_channel(channel, "❌ Cannot rerun — a game is currently in progress.")
         return False
 
     if not form.get("responses", {}).get("bet"):
-        await channel.send("❌ No previous game to rerun.")
+        await send_channel(channel, "❌ No previous game to rerun.")
         return False
 
     cancel_rerun_timeout(form)
@@ -263,23 +265,21 @@ async def prompt_rerun_bet(channel, form, bot_user):
     mention = ticket_mention(channel, form)
     max_bet = get_max_bet(form)
     _, _, coin = get_bet_info(form)
-    await channel.send(
+    await send_channel(
+        channel,
         f"💸 {mention} **How much would you like to bet for the rerun?**\n\n"
-        f'**Example:** "5 {coin}", "10 litecoin" (MIN: __$1__ | MAX: __${max_bet}__)'
+        f'**Example:** "5 {coin}", "10 litecoin" (MIN: __$1__ | MAX: __${max_bet}__)',
     )
     save_session_from_form(channel.id, form)
     return True
 
 
 async def finalize_rerun(channel, form, bot_user):
-    if not await fund_rerun_wager(channel, form):
-        await payout_winnings_if_any(channel, form)
-        return False
-
+    form["pending_rerun_fund"] = True
     form["waiting_for_confirm"] = True
     form["waiting_for_adder_confirm"] = False
     form["confirm_text"] = build_confirm_text(channel, form, bot_user)
-    await channel.send(form["confirm_text"])
+    await send_channel(channel, form["confirm_text"])
     save_session_from_form(channel.id, form)
     return True
 
@@ -292,7 +292,7 @@ async def handle_rerun_bet_response(message, form, bot_user, bot=None):
 
     response = message.content.strip()
     if not bet_validator(response, form):
-        await message.reply("❌ Invalid format or out of range.")
+        await reply_message(message, "❌ Invalid format or out of range.")
         return
 
     form["responses"]["bet"] = response
