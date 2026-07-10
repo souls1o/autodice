@@ -20,7 +20,6 @@ from services import get_house_balance_text, build_stats_text, get_wallets
 from state import (
     active_forms,
     clear_ticket_session,
-    get_auto_post_channel_id,
     get_form,
     is_maintenance_mode,
     is_ticket_channel,
@@ -201,6 +200,31 @@ async def _handle_message(message: discord.Message):
             enabled = toggle_maintenance()
             status = "enabled" if enabled else "disabled"
             await reply_message(message, f"Maintenance mode is {status}.")
+            return
+        if message.author.id == config.ADMIN_USER_ID and message.content.strip().lower().startswith("!setchannel"):
+            parts = message.content.strip().split(maxsplit=1)
+            if len(parts) < 2:
+                await reply_message(message, "Usage: `!setchannel <channel_id>`")
+                return
+            raw = parts[1].strip()
+            if raw.startswith("<#") and raw.endswith(">"):
+                raw = raw[2:-1]
+            try:
+                channel_id = int(raw)
+            except ValueError:
+                await reply_message(message, "❌ Invalid channel ID.")
+                return
+            set_auto_post_channel_id(channel_id)
+            label = f"`{channel_id}`"
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(channel_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    channel = None
+            if channel is not None:
+                label = f"#{channel.name} (`{channel_id}`)"
+            await reply_message(message, f"✅ Auto-post channel set to {label}.")
             return
 
     if not isinstance(message.channel, discord.TextChannel):

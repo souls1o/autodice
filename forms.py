@@ -72,6 +72,7 @@ def build_dm_help_text(user_id):
             "`!stats` — wagered, profit, games, and house balance",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
+            "`!setchannel <id>` — set auto-post channel",
         ])
     return "\n".join(lines)
 
