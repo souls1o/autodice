@@ -20,7 +20,10 @@ from services import get_house_balance_text, build_stats_text, get_wallets
 from state import (
     active_forms,
     clear_ticket_session,
+    clear_auto_post_channel_override,
+    get_auto_post_channel_id,
     get_form,
+    is_auto_post_channel_manual,
     is_maintenance_mode,
     is_ticket_channel,
     set_auto_post_channel_id,
@@ -39,18 +42,22 @@ def _find_lf_players_channel():
     return None
 
 
-async def resolve_auto_post_channel(*, force_search=False):
+async def resolve_auto_post_channel():
     channel_id = get_auto_post_channel_id()
-    if not force_search:
-        channel = bot.get_channel(channel_id)
-        if channel is not None:
-            return channel
+    channel = bot.get_channel(channel_id)
+    if channel is None:
         try:
-            return await bot.fetch_channel(channel_id)
+            channel = await bot.fetch_channel(channel_id)
         except (discord.NotFound, discord.Forbidden):
-            pass
+            channel = None
         except discord.HTTPException:
-            pass
+            channel = None
+
+    if channel is not None:
+        return channel
+
+    if is_auto_post_channel_manual():
+        return None
 
     channel = _find_lf_players_channel()
     if channel is None:
@@ -65,18 +72,28 @@ async def resolve_auto_post_channel(*, force_search=False):
 async def send_auto_post():
     channel = await resolve_auto_post_channel()
     if channel is None:
-        print(f"[auto_post] no #{config.AUTO_POST_CHANNEL_NAME} channel found")
+        channel_id = get_auto_post_channel_id()
+        if is_auto_post_channel_manual():
+            print(f"[auto_post] cannot resolve manual channel `{channel_id}`")
+        else:
+            print(f"[auto_post] no #{config.AUTO_POST_CHANNEL_NAME} channel found")
         return
 
     try:
         await send_channel(channel, config.AUTO_POST_MESSAGE)
-        return
-    except (discord.NotFound, discord.Forbidden):
-        channel = await resolve_auto_post_channel(force_search=True)
-        if channel is None:
-            print(f"[auto_post] cannot post — #{config.AUTO_POST_CHANNEL_NAME} not found")
+    except (discord.NotFound, discord.Forbidden) as exc:
+        print(f"[auto_post] send failed in #{getattr(channel, 'name', '?')} (`{channel.id}`): {exc}")
+        if is_auto_post_channel_manual():
             return
-        await send_channel(channel, config.AUTO_POST_MESSAGE)
+        fallback = _find_lf_players_channel()
+        if fallback is None or fallback.id == channel.id:
+            return
+        set_auto_post_channel_id(fallback.id)
+        print(f"[auto_post] switched to #{fallback.name} (`{fallback.id}`)")
+        try:
+            await send_channel(fallback, config.AUTO_POST_MESSAGE)
+        except (discord.NotFound, discord.Forbidden) as retry_exc:
+            print(f"[auto_post] fallback send failed: {retry_exc}")
 
 
 def ensure_auto_post():
@@ -157,6 +174,7 @@ async def on_guild_channel_update(before, after):
 @bot.event
 async def on_guild_channel_delete(channel):
     if channel.id == get_auto_post_channel_id():
+        clear_auto_post_channel_override()
         print(f"[auto_post] channel deleted — will look for #{config.AUTO_POST_CHANNEL_NAME}")
     clear_ticket_session(channel.id)
 
@@ -214,7 +232,7 @@ async def _handle_message(message: discord.Message):
             except ValueError:
                 await reply_message(message, "❌ Invalid channel ID.")
                 return
-            set_auto_post_channel_id(channel_id)
+            set_auto_post_channel_id(channel_id, manual=True)
             label = f"`{channel_id}`"
             channel = bot.get_channel(channel_id)
             if channel is None:
@@ -224,7 +242,12 @@ async def _handle_message(message: discord.Message):
                     channel = None
             if channel is not None:
                 label = f"#{channel.name} (`{channel_id}`)"
-            await reply_message(message, f"✅ Auto-post channel set to {label}.")
+            reply = f"✅ Auto-post channel set to {label}."
+            if channel is None:
+                reply += "\n⚠️ Could not verify that channel — posting will retry on the next interval."
+            await reply_message(message, reply)
+            if not is_maintenance_mode():
+                asyncio.create_task(send_auto_post())
             return
 
     if not isinstance(message.channel, discord.TextChannel):

@@ -7,6 +7,7 @@ ticket_sessions = {}
 maintenance_mode = False
 maintenance_notified_channels = set()
 _auto_post_channel_id = None
+_auto_post_channel_manual = False
 
 
 def get_auto_post_channel_id():
@@ -15,14 +16,26 @@ def get_auto_post_channel_id():
     return config.AUTO_POST_CHANNEL_ID
 
 
-def set_auto_post_channel_id(channel_id):
-    global _auto_post_channel_id
+def is_auto_post_channel_manual():
+    return _auto_post_channel_manual
+
+
+def set_auto_post_channel_id(channel_id, *, manual=False):
+    global _auto_post_channel_id, _auto_post_channel_manual
     old_id = get_auto_post_channel_id()
     _auto_post_channel_id = channel_id
+    if manual:
+        _auto_post_channel_manual = True
     if old_id in config.CHANNEL_BLACKLIST and old_id != channel_id:
         config.CHANNEL_BLACKLIST.remove(old_id)
     if channel_id not in config.CHANNEL_BLACKLIST:
         config.CHANNEL_BLACKLIST.append(channel_id)
+
+
+def clear_auto_post_channel_override():
+    global _auto_post_channel_id, _auto_post_channel_manual
+    _auto_post_channel_id = None
+    _auto_post_channel_manual = False
 
 
 def is_maintenance_mode():
