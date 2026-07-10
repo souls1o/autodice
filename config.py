@@ -15,6 +15,7 @@ DB_NAME = os.getenv("DB_NAME", "gatodicer")
 ADMIN_USER_ID = 1200925985999171706
 
 AUTO_POST_CHANNEL_ID = 1524104505384501331
+AUTO_POST_CHANNEL_NAME = "lf-players"
 AUTO_POST_INTERVAL = 300
 
 # Channel scanned for the latest Game #<number> to increment after each game
@@ -43,8 +44,7 @@ ROLL_HYPE_MESSAGES = [
 # Channels where ticket scanning / form start is ignored (e.g. general chat, auto-post)
 CHANNEL_BLACKLIST = [
     AUTO_POST_CHANNEL_ID,
-    1524104505384501331,
-    1258789148702146700
+    1258789148702146700,
 ]
 
 AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`

@@ -16,9 +16,67 @@ from forms import (
 )
 from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, start_game
 from services import get_house_balance_text, build_stats_text, get_wallets
-from state import active_forms, clear_ticket_session, get_form, is_maintenance_mode, is_ticket_channel, toggle_maintenance
+from state import (
+    active_forms,
+    clear_ticket_session,
+    get_auto_post_channel_id,
+    get_form,
+    is_maintenance_mode,
+    is_ticket_channel,
+    set_auto_post_channel_id,
+    toggle_maintenance,
+)
 
 bot = commands.Bot(command_prefix="!", self_bot=True)
+
+
+def _find_lf_players_channel():
+    target = config.AUTO_POST_CHANNEL_NAME.lower()
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.name.lower() == target:
+                return channel
+    return None
+
+
+async def resolve_auto_post_channel(*, force_search=False):
+    channel_id = get_auto_post_channel_id()
+    if not force_search:
+        channel = bot.get_channel(channel_id)
+        if channel is not None:
+            return channel
+        try:
+            return await bot.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden):
+            pass
+        except discord.HTTPException:
+            pass
+
+    channel = _find_lf_players_channel()
+    if channel is None:
+        return None
+
+    if channel.id != channel_id:
+        set_auto_post_channel_id(channel.id)
+        print(f"[auto_post] switched to #{channel.name} (`{channel.id}`)")
+    return channel
+
+
+async def send_auto_post():
+    channel = await resolve_auto_post_channel()
+    if channel is None:
+        print(f"[auto_post] no #{config.AUTO_POST_CHANNEL_NAME} channel found")
+        return
+
+    try:
+        await channel.send(config.AUTO_POST_MESSAGE)
+        return
+    except (discord.NotFound, discord.Forbidden):
+        channel = await resolve_auto_post_channel(force_search=True)
+        if channel is None:
+            print(f"[auto_post] cannot post — #{config.AUTO_POST_CHANNEL_NAME} not found")
+            return
+        await channel.send(config.AUTO_POST_MESSAGE)
 
 
 def ensure_auto_post():
@@ -52,12 +110,7 @@ async def auto_post():
     try:
         if is_maintenance_mode():
             return
-        channel = bot.get_channel(config.AUTO_POST_CHANNEL_ID)
-        if channel is None:
-            channel = await bot.fetch_channel(config.AUTO_POST_CHANNEL_ID)
-        await channel.send(config.AUTO_POST_MESSAGE)
-    except discord.Forbidden:
-        print("[auto_post] missing permission — will retry next interval")
+        await send_auto_post()
     except discord.HTTPException as exc:
         print(f"[auto_post] HTTP error ({exc.status}): {exc}")
     except Exception as exc:
@@ -102,6 +155,8 @@ async def on_guild_channel_update(before, after):
 
 @bot.event
 async def on_guild_channel_delete(channel):
+    if channel.id == get_auto_post_channel_id():
+        print(f"[auto_post] channel deleted — will look for #{config.AUTO_POST_CHANNEL_NAME}")
     clear_ticket_session(channel.id)
 
 

@@ -1,8 +1,27 @@
+import config
+
 active_forms = {}
 ticket_channels = set()
 ticket_sessions = {}
 maintenance_mode = False
 maintenance_notified_channels = set()
+_auto_post_channel_id = None
+
+
+def get_auto_post_channel_id():
+    if _auto_post_channel_id is not None:
+        return _auto_post_channel_id
+    return config.AUTO_POST_CHANNEL_ID
+
+
+def set_auto_post_channel_id(channel_id):
+    global _auto_post_channel_id
+    old_id = get_auto_post_channel_id()
+    _auto_post_channel_id = channel_id
+    if old_id in config.CHANNEL_BLACKLIST and old_id != channel_id:
+        config.CHANNEL_BLACKLIST.remove(old_id)
+    if channel_id not in config.CHANNEL_BLACKLIST:
+        config.CHANNEL_BLACKLIST.append(channel_id)
 
 
 def is_maintenance_mode():
