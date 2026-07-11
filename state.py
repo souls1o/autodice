@@ -126,12 +126,13 @@ def get_hold_data(channel_id):
     form = active_forms.get(channel_id)
     if form:
         sync_winnings_crypto(form)
+        save_session_from_form(channel_id, form)
         return (
             get_ticket_hold_usd(form),
             form.get("winnings_crypto", 0.0),
             form.get("winnings_coin", "ltc"),
         )
-    session = get_ticket_session(channel_id)
+    session = ticket_sessions.get(channel_id) or {}
     hold_usd = max(round(float(session.get("winnings_usd", 0.0)), 2), 0.0)
     return (
         hold_usd,
@@ -191,10 +192,7 @@ def clear_ticket_session(channel_id):
 
 
 def finish_form(channel, form, *, payout=False):
+    """End the active form. Hold/winnings are never cleared here — only channel delete is."""
     cancel_rerun_timeout(form)
-    channel_id = channel.id
-    if payout:
-        clear_ticket_session(channel_id)
-    else:
-        save_session_from_form(channel_id, form)
-        active_forms.pop(channel_id, None)
+    save_session_from_form(channel.id, form)
+    active_forms.pop(channel.id, None)

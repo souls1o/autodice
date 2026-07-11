@@ -10,6 +10,7 @@ from forms import (
     handle_global_listeners,
     handle_ticket_command,
     is_roll_command,
+    message_references_bot,
     should_process_channel,
     start_ticket_form,
     was_bot_added_to_channel,
@@ -23,6 +24,7 @@ from state import (
     clear_auto_post_channel_override,
     get_auto_post_channel_id,
     get_form,
+    get_ticket_session,
     is_auto_post_channel_manual,
     is_maintenance_mode,
     is_ticket_channel,
@@ -272,8 +274,10 @@ async def _handle_message(message: discord.Message):
         state = form["game_state"]
         if state.get("game_type") == "dice" and message.author.bot and (
             state.get("waiting_for_embed")
+            or state.get("bot_roll_in_flight")
             or state.get("pending_bot_total") is not None
             or state.get("awaiting_user_after_bot")
+            or state.get("user_totals_queue")
         ):
             await handle_da_hood_message(message, form, bot.user, bot)
             return
@@ -286,6 +290,12 @@ async def _handle_message(message: discord.Message):
         await handle_form_step(message, form, bot.user)
 
     if channel_id not in active_forms:
+        # After a game, mentioning self/id/username must NOT start a new form —
+        # only !rerun or "yes" (handled elsewhere) should continue play.
+        session = get_ticket_session(channel_id)
+        post_game = bool(session.get("game_started")) or float(session.get("winnings_usd", 0) or 0) > 0
+        if post_game and message_references_bot(message, bot.user):
+            return
         await asyncio.sleep(1)
         await start_ticket_form(message.channel, bot.user, bot)
         return

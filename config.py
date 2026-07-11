@@ -41,10 +41,14 @@ ROLL_HYPE_MESSAGES = [
     "lol",
 ]
 
-# Channels where ticket scanning / form start is ignored (e.g. general chat, auto-post)
+# Channels where ticket scanning / form start is ignored (ids and/or names)
 CHANNEL_BLACKLIST = [
     AUTO_POST_CHANNEL_ID,
     1524789293607026879,
+    # "lf-players",  # names work too
+    "cmds",
+    "vouches",
+    "lf-players"
 ]
 
 AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`

@@ -130,55 +130,75 @@ async def record_winnings(channel, form, self_won):
     save_session_from_form(channel.id, form)
 
 
-async def fund_rerun_wager(channel, form):
-    wager_usd, coin = get_wager_usd(form), get_bet_info(form)[2]
+async def send_rerun_shortfall_before_confirm(channel, form):
+    """Send crypto shortfall BEFORE confirmation. Never touches hold."""
+    wager_usd = get_wager_usd(form)
+    coin = get_bet_info(form)[2]
     winnings_usd = max(form.get("winnings_usd", 0), 0)
     from_hold = round(min(winnings_usd, wager_usd), 2)
     shortfall = round(wager_usd - from_hold, 2)
+
+    form["pending_hold_deduct"] = from_hold
+    form["pending_wager_usd"] = wager_usd
+    form["rerun_shortfall_sent"] = 0.0
+
+    if shortfall <= 0:
+        save_session_from_form(channel.id, form)
+        return True
+
+    address = form.get("payout_address")
+    if not address:
+        await send_channel(channel, "❌ No payout address on file for rerun.")
+        return False
+    try:
+        amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
+    except Exception as exc:
+        print(f"[send_rerun_shortfall] price lookup failed: {exc}")
+        await send_channel(channel, "❌ Could not price rerun top-up.")
+        return False
+    result = await send_apirone(coin, address, amount)
+    if "error" in result:
+        err = result["error"]
+        await send_channel(channel, f"❌ Rerun transfer failed: {err if isinstance(err, str) else err}")
+        return False
+    form["rerun_shortfall_sent"] = shortfall
+    await send_channel(
+        channel,
+        f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun",
+    )
+    save_session_from_form(channel.id, form)
+    return True
+
+
+async def apply_hold_after_confirm(channel, form):
+    """After confirmation: subtract from hold only if sufficient. Never sends crypto."""
+    wager_usd = form.pop("pending_wager_usd", None)
+    if wager_usd is None:
+        wager_usd = get_wager_usd(form)
+    coin = get_bet_info(form)[2]
+    planned = float(form.pop("pending_hold_deduct", 0) or 0)
+    available = max(form.get("winnings_usd", 0), 0)
+    deduct = round(min(planned, available, wager_usd), 2)
     deducted = 0.0
 
-    if from_hold > 0:
+    if deduct > 0:
         try:
-            deducted = await asyncio.to_thread(subtract_winnings_usd, form, from_hold, coin)
+            deducted = await asyncio.to_thread(subtract_winnings_usd, form, deduct, coin)
         except Exception as exc:
-            print(f"[fund_rerun_wager] hold deduction failed: {exc}")
+            print(f"[apply_hold_after_confirm] hold deduction failed: {exc}")
             return False
 
-    if shortfall > 0:
-        address = form.get("payout_address")
-        if not address:
-            if deducted > 0:
-                add_winnings_usd(form, deducted, coin)
-                sync_winnings_crypto(form)
-            await send_channel(channel, "❌ No payout address on file for rerun.")
-            return False
-        try:
-            amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
-        except Exception as exc:
-            print(f"[fund_rerun_wager] price lookup failed: {exc}")
-            if deducted > 0:
-                add_winnings_usd(form, deducted, coin)
-                sync_winnings_crypto(form)
-            await send_channel(channel, "❌ Could not price rerun top-up.")
-            return False
-        result = await send_apirone(coin, address, amount)
-        if "error" in result:
-            err = result["error"]
-            if deducted > 0:
-                add_winnings_usd(form, deducted, coin)
-                sync_winnings_crypto(form)
-            await send_channel(channel, f"❌ Rerun transfer failed: {err if isinstance(err, str) else err}")
-            return False
-        await send_channel(
-            channel,
-            f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun",
-        )
-
+    form.pop("rerun_shortfall_sent", None)
     form["stake_from_hold"] = deducted > 0
     add_wagered_usd(form, wager_usd)
     sync_winnings_crypto(form)
     save_session_from_form(channel.id, form)
     return True
+
+
+async def fund_rerun_wager(channel, form):
+    """Legacy name — after confirm, only apply hold. Crypto already sent before confirm."""
+    return await apply_hold_after_confirm(channel, form)
 
 
 async def _post_game_background(channel, form, self_won, bot_user, bot):
@@ -200,6 +220,9 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
 
 
 async def payout_winnings_if_any(channel, form):
+    from bets import sync_winnings_crypto
+
+    sync_winnings_crypto(form)
     winnings_usd = form.get("winnings_usd", 0)
     winnings_crypto = form.get("winnings_crypto", 0)
     if winnings_usd > 0 and winnings_crypto > 0:
@@ -211,6 +234,7 @@ async def payout_winnings_if_any(channel, form):
             await send_channel(channel, f"`{address}`{tip_line}")
         else:
             await send_channel(channel, f"❌ Failed to generate {coin.upper()} address.")
+    # Keep hold in session — !hold must never clear
     finish_form(channel, form, payout=True)
 
 
@@ -275,6 +299,10 @@ async def prompt_rerun_bet(channel, form, bot_user):
 
 
 async def finalize_rerun(channel, form, bot_user):
+    if not await send_rerun_shortfall_before_confirm(channel, form):
+        await payout_winnings_if_any(channel, form)
+        return False
+
     form["pending_rerun_fund"] = True
     form["waiting_for_confirm"] = True
     form["waiting_for_adder_confirm"] = False
@@ -305,6 +333,32 @@ async def process_rerun(channel, form, bot_user, bot=None):
     await prompt_rerun_bet(channel, form, bot_user)
 
 
+async def start_new_form_from_yes(channel, form, bot_user, bot=None):
+    """'yes' after a game → brand-new form (new settings), keeping hold/session funds."""
+    from forms import ask_next_step
+    from state import active_forms, new_form_dict
+
+    cancel_rerun_timeout(form)
+    form["waiting_for_rerun"] = False
+    form.pop("pending_rerun_fund", None)
+    form.pop("pending_hold_deduct", None)
+    form.pop("pending_wager_usd", None)
+    save_session_from_form(channel.id, form)
+
+    ticket_user_id = form["ticket_user_id"]
+    payout_address = form.get("payout_address")
+    funds_recipient_id = form.get("funds_recipient_id")
+
+    active_forms.pop(channel.id, None)
+    new_form = new_form_dict(channel.id, ticket_user_id)
+    if payout_address:
+        new_form["payout_address"] = payout_address
+    if funds_recipient_id:
+        new_form["funds_recipient_id"] = funds_recipient_id
+    active_forms[channel.id] = new_form
+    await ask_next_step(channel, bot_user)
+
+
 async def handle_rerun_response(message, form, bot_user, start_game_fn, bot=None):
     if not form.get("waiting_for_rerun") or message.author.id != form["ticket_user_id"]:
         return
@@ -319,4 +373,4 @@ async def handle_rerun_response(message, form, bot_user, start_game_fn, bot=None
         await payout_winnings_if_any(message.channel, form)
         return
 
-    await prompt_rerun_bet(message.channel, form, bot_user)
+    await start_new_form_from_yes(message.channel, form, bot_user, bot)

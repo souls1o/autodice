@@ -4,7 +4,6 @@ import discord
 
 import config
 from bets import (
-    add_wagered_usd,
     bet_validator,
     calculate_my_bet,
     extract_crypto_address,
@@ -170,12 +169,33 @@ def _overwrite_target_ids(channel):
     return {getattr(target, "id", None) for target in overwrites}
 
 
-def is_channel_blacklisted(channel_id):
-    return channel_id in config.CHANNEL_BLACKLIST
+def is_channel_blacklisted(channel):
+    """True if channel id or name matches CHANNEL_BLACKLIST (ints and/or name strings)."""
+    if channel is None:
+        return False
+    if isinstance(channel, int):
+        channel_id, name = channel, None
+    else:
+        channel_id = getattr(channel, "id", None)
+        name = (getattr(channel, "name", None) or "").lower()
+
+    for entry in config.CHANNEL_BLACKLIST:
+        if isinstance(entry, int):
+            if channel_id is not None and entry == channel_id:
+                return True
+            continue
+        text = str(entry).strip()
+        if not text:
+            continue
+        if text.isdigit() and channel_id is not None and int(text) == channel_id:
+            return True
+        if name and text.lower() == name:
+            return True
+    return False
 
 
 def was_bot_added_to_channel(channel, bot_user, before=None):
-    if is_channel_blacklisted(channel.id):
+    if is_channel_blacklisted(channel):
         return False
     member = channel.guild.get_member(bot_user.id)
     if member is None:
@@ -209,7 +229,7 @@ def was_bot_added_to_channel(channel, bot_user, before=None):
 
 
 def should_process_channel(channel, message=None, bot_user=None):
-    if is_channel_blacklisted(channel.id):
+    if is_channel_blacklisted(channel):
         return False
     if is_ticket_channel(channel):
         return True
@@ -284,7 +304,7 @@ def build_confirm_text(channel, form, bot_user):
 
 
 async def start_ticket_form(channel, bot_user, bot=None):
-    if is_channel_blacklisted(channel.id):
+    if is_channel_blacklisted(channel):
         return
     if get_form(channel.id):
         return
@@ -462,6 +482,8 @@ async def handle_cancel_command(message, bot_user):
     cancel_rerun_timeout(form)
     form.pop("game_state", None)
     form.pop("pending_rerun_fund", None)
+    form.pop("pending_hold_deduct", None)
+    form.pop("pending_wager_usd", None)
     form["waiting_for_rerun"] = False
     form["waiting_for_rerun_bet"] = False
     form["waiting_for_confirm"] = False
@@ -532,21 +554,36 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                 )
                 return
             wager_usd = get_wager_usd(form)
-            amount = usd_to_smallest_unit(wager_usd, coin, get_price(coin))
-            result = await send_apirone(coin, address, amount)
-            if "error" in result:
-                err = result["error"]
+            hold_usd = max(form.get("winnings_usd", 0), 0)
+            from_hold = round(min(hold_usd, wager_usd), 2)
+            shortfall = round(wager_usd - from_hold, 2)
+
+            if shortfall > 0:
+                amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
+                result = await send_apirone(coin, address, amount)
+                if "error" in result:
+                    err = result["error"]
+                    await send_channel(
+                        message.channel,
+                        f"❌ Transfer failed: {err if isinstance(err, str) else err}",
+                    )
+                    return
                 await send_channel(
                     message.channel,
-                    f"❌ Transfer failed: {err if isinstance(err, str) else err}",
+                    f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",
                 )
-                return
+            elif from_hold > 0:
+                await send_channel(
+                    message.channel,
+                    f"✅ Address saved — `${format_bet_display(from_hold)}` will come from hold after confirm.",
+                )
+
             form["waiting_for_address"] = False
             form["payout_address"] = address
             form["funds_recipient_id"] = recipient_id
-            add_wagered_usd(form, wager_usd)
+            form["pending_hold_deduct"] = from_hold
+            form["pending_wager_usd"] = wager_usd
             save_session_from_form(message.channel.id, form)
-            await send_channel(message.channel, f"📤 Sent `${wager_usd}` {coin.upper()} to `{address}`")
             form["step"] += 1
             await ask_next_step(message.channel, bot_user)
 
