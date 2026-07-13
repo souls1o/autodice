@@ -82,6 +82,8 @@ async def trigger_bot_roll(roll_channel, form, bot_user):
 
 
 def _queue_user_roll(state, message_id):
+    if message_id in state.get("consumed_roll_cmd_ids", set()):
+        return
     pending = state.setdefault("pending_roll_message_ids", [])
     queued = state.setdefault("queued_user_roll_ids", [])
     if message_id not in pending and message_id not in queued:
@@ -89,6 +91,8 @@ def _queue_user_roll(state, message_id):
 
 
 def _accept_user_roll(state, message_id, ticket_user_id):
+    if message_id in state.get("consumed_roll_cmd_ids", set()):
+        return
     pending = state.setdefault("pending_roll_message_ids", [])
     state.setdefault("pending_user_embeds", 0)
     if message_id not in pending:
@@ -132,12 +136,12 @@ def _try_activate_queued_user_rolls(state, ticket_user_id, bot_user_id):
 
 
 def _consume_user_roll_cmd(state, cmd_id):
+    state.setdefault("consumed_roll_cmd_ids", set()).add(cmd_id)
     pending = state.get("pending_roll_message_ids", [])
     if cmd_id in pending:
         pending.remove(cmd_id)
         if state.get("pending_user_embeds", 0) > 0:
             state["pending_user_embeds"] -= 1
-        return
     queued = state.get("queued_user_roll_ids", [])
     if cmd_id in queued:
         queued.remove(cmd_id)
@@ -145,8 +149,12 @@ def _consume_user_roll_cmd(state, cmd_id):
 
 def _stash_prefetched_user_total(state, cmd_id, total):
     """Keep out-of-turn user embed totals across score/reset so bot can answer them."""
+    if cmd_id in state.get("consumed_roll_cmd_ids", set()):
+        return
     _queue_user_roll(state, cmd_id)
     prefs = state.setdefault("prefetched_user_totals", [])
+    if any(p["cmd_id"] == cmd_id for p in prefs):
+        return
     prefs.append({"cmd_id": cmd_id, "total": total})
 
 
@@ -193,10 +201,11 @@ def _reset_round_state(state, ticket_user_id=None, bot_user_id=None):
     # Keep queued_user_roll_ids + prefetched_user_totals — out-of-turn rolls
     # that arrived before the score must still be answered next round.
     # Re-queue any pending cmds that were activated but not yet consumed.
+    consumed = state.get("consumed_roll_cmd_ids", set())
     pending = state.get("pending_roll_message_ids", [])
     queued = state.setdefault("queued_user_roll_ids", [])
     for roll_id in pending:
-        if roll_id not in queued:
+        if roll_id not in consumed and roll_id not in queued:
             queued.append(roll_id)
 
     state["user_totals_queue"] = []
@@ -221,6 +230,12 @@ async def _answer_early_user_rolls(roll_channel, form, bot_user, bot):
     state = form["game_state"]
     prefs = state.setdefault("prefetched_user_totals", [])
     queued = state.setdefault("queued_user_roll_ids", [])
+    consumed = state.get("consumed_roll_cmd_ids", set())
+
+    # Drop zombies that were already scored
+    if queued:
+        state["queued_user_roll_ids"] = [r for r in queued if r not in consumed]
+        queued = state["queued_user_roll_ids"]
 
     if not prefs and not queued:
         return False
@@ -228,18 +243,24 @@ async def _answer_early_user_rolls(roll_channel, form, bot_user, bot):
     # Fold every prefetched embed into the match queue
     while prefs:
         entry = prefs.pop(0)
+        if entry["cmd_id"] in consumed:
+            continue
         state.setdefault("user_totals_queue", []).append(entry["total"])
-        if entry["cmd_id"] in queued:
-            queued.remove(entry["cmd_id"])
+        _consume_user_roll_cmd(state, entry["cmd_id"])
+        consumed = state.get("consumed_roll_cmd_ids", set())
 
     # Only pull queued cmds that already have embeds. Leave the rest queued
     # so a later embed can stash + resume (don't activate-then-lose on reset).
     still_queued = []
     while queued:
         roll_id = queued.pop(0)
+        if roll_id in consumed:
+            continue
         stashed = _take_prefetched_user_total(state, roll_id)
         if stashed is not None:
             state.setdefault("user_totals_queue", []).append(stashed)
+            _consume_user_roll_cmd(state, roll_id)
+            consumed = state.get("consumed_roll_cmd_ids", set())
         else:
             still_queued.append(roll_id)
     queued.extend(still_queued)
@@ -413,7 +434,9 @@ async def handle_roll_embed(message, form, bot_user, bot):
         state["pending_user_embeds"] = 0
         state["user_totals_queue"] = []
         state["waiting_for_embed"] = False
-        # Prefer matching a stashed total for this command if present
+        # Must consume so this -roll isn't re-queued on reset as a zombie that
+        # blocks the bot-first opener after early rolls are answered.
+        _consume_user_roll_cmd(state, cmd.id)
         stashed = _take_prefetched_user_total(state, cmd.id)
         await _score_pair(message.channel, form, bot_user, bot, bot_total, stashed if stashed is not None else total)
         return
@@ -653,6 +676,7 @@ async def start_game(channel, form, bot_user, bot=None):
         "pending_roll_message_ids": [],
         "queued_user_roll_ids": [],
         "prefetched_user_totals": [],
+        "consumed_roll_cmd_ids": set(),
         "bot_rolls_remaining": 0,
         "bot_roll_in_flight": False,
         "scoring": False,
