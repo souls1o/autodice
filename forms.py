@@ -35,7 +35,7 @@ from state import (
     ticket_channels,
 )
 
-LISTEN_ROLES = [1258727325265297408, 1258732498482106398]
+LISTEN_ROLES = [1258727325265297408, 1258732498482106398, 1505600256350355537]
 VALIDATORS = {"bet_validator": bet_validator}
 COIN_ADDRESS_COMMANDS = {"!ltc": "ltc", "!btc": "btc", "!eth": "eth"}
 
