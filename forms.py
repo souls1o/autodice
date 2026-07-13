@@ -452,10 +452,13 @@ async def handle_hold_command(message):
 
 async def handle_rerun_command(message, bot_user, bot=None):
     from postgame import process_rerun
+    from state import form_from_session
 
     channel = message.channel
     form = get_form(channel.id)
     if not form:
+        form = form_from_session(channel.id)
+    if not form or not form.get("responses", {}).get("bet"):
         await send_channel(channel, "❌ No previous game to rerun.")
         return
 

@@ -293,11 +293,11 @@ async def _handle_message(message: discord.Message):
         await handle_form_step(message, form, bot.user)
 
     if channel_id not in active_forms:
-        # After a game, mentioning self/id/username must NOT start a new form —
-        # only !rerun or "yes" (handled elsewhere) should continue play.
+        # After a game / "no" to rerun, don't restart the form on random chat —
+        # only a bot ping (or !rerun, handled above) may start again.
         session = get_ticket_session(channel_id)
         post_game = bool(session.get("game_started")) or float(session.get("winnings_usd", 0) or 0) > 0
-        if post_game and message_references_bot(message, bot.user):
+        if post_game and not message_references_bot(message, bot.user):
             return
         await asyncio.sleep(1)
         await start_ticket_form(message.channel, bot.user, bot)

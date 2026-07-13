@@ -96,8 +96,26 @@ def save_session_from_form(channel_id, form):
         session["game_confirmer_user_id"] = form["game_confirmer_user_id"]
     if form.get("payout_address"):
         session["payout_address"] = form["payout_address"]
+    if form.get("responses"):
+        session["responses"] = dict(form["responses"])
     if form.get("game_started"):
         session["game_started"] = True
+
+
+def form_from_session(channel_id):
+    """Rebuild an active form from the persisted ticket session (e.g. after 'no')."""
+    session = ticket_sessions.get(channel_id)
+    if not session or not session.get("ticket_user_id"):
+        return None
+    form = new_form_dict(channel_id, session.get("ticket_user_id"))
+    if session.get("responses"):
+        form["responses"] = dict(session["responses"])
+    if session.get("payout_address"):
+        form["payout_address"] = session["payout_address"]
+    if session.get("funds_recipient_id"):
+        form["funds_recipient_id"] = session["funds_recipient_id"]
+    form["total_wagered_usd"] = session.get("total_wagered_usd", 0.0)
+    return form
 
 
 def can_cancel_ticket(channel_id, form=None):
@@ -118,6 +136,11 @@ def apply_session_to_form(channel_id, form):
     form["winnings_crypto"] = session.get("winnings_crypto", 0.0)
     form["winnings_coin"] = session.get("winnings_coin", "ltc")
     form["game_confirmer_user_id"] = session.get("game_confirmer_user_id")
+    if session.get("payout_address") and not form.get("payout_address"):
+        form["payout_address"] = session["payout_address"]
+    if session.get("responses") and not form.get("responses"):
+        form["responses"] = dict(session["responses"])
+    form["total_wagered_usd"] = session.get("total_wagered_usd", form.get("total_wagered_usd", 0.0))
 
 
 def get_hold_data(channel_id):
