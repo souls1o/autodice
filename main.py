@@ -275,9 +275,12 @@ async def _handle_message(message: discord.Message):
         if state.get("game_type") == "dice" and message.author.bot and (
             state.get("waiting_for_embed")
             or state.get("bot_roll_in_flight")
+            or state.get("scoring")
             or state.get("pending_bot_total") is not None
             or state.get("awaiting_user_after_bot")
             or state.get("user_totals_queue")
+            or state.get("prefetched_user_totals")
+            or state.get("queued_user_roll_ids")
         ):
             await handle_da_hood_message(message, form, bot.user, bot)
             return
