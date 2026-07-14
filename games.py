@@ -23,7 +23,7 @@ async def get_ticket_channel(bot, form, fallback=None):
 
 
 def is_bot_turn(state):
-    return state["current_player"] in ("me", "@gatodicer")
+    return state["current_player"] in ("me", "@67dicer")
 
 
 def current_player_key(state):
@@ -707,13 +707,13 @@ async def start_game(channel, form, bot_user, bot=None):
         }
         return
 
-    first_raw = responses.get("first", "@gatodicer 1").replace(" 1", "").strip()
+    first_raw = responses.get("first", "@67dicer 1").replace(" 1", "").strip()
     ticket_user_id = form.get("ticket_user_id")
     if first_raw in ("@mention", "you") or (
         ticket_user_id and str(ticket_user_id) in first_raw
     ):
         first_player = "you"
-    elif first_raw in ("@gatodicer", "me") or str(bot_user.id) in first_raw:
+    elif first_raw in ("@67dicer", "me") or str(bot_user.id) in first_raw:
         first_player = "me"
     else:
         first_player = first_raw

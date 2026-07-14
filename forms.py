@@ -153,7 +153,7 @@ def is_adder_confirm(content):
 
 def message_references_bot(message, bot_user):
     content = message.content or ""
-    if "gatodicer" in content.lower():
+    if "67dicer" in content.lower():
         return True
     if str(bot_user.id) in content:
         return True
@@ -275,7 +275,7 @@ def ticket_mention(channel, form):
 
 def format_text(text, mention, responses, bot_user, dynamic=None):
     dynamic = dynamic or {}
-    result = text.replace("@mention", mention).replace("@gatodicer", bot_user.mention)
+    result = text.replace("@mention", mention).replace("@67dicer", bot_user.mention)
     for key, value in {**responses, **dynamic}.items():
         result = result.replace(f"{{{key}}}", str(value))
     return result
@@ -287,7 +287,7 @@ def build_confirm_text(channel, form, bot_user):
     game = responses.get("game", "dice")
     first_to = responses.get("first_to", "ft3")
     gamemode_key = responses.get("gamemode", "7s")
-    first = responses.get("first", "@gatodicer 1").replace("@mention", mention).replace("@gatodicer", bot_user.mention)
+    first = responses.get("first", "@67dicer 1").replace("@mention", mention).replace("@67dicer", bot_user.mention)
     mode = responses.get("mode", "normal")
     side = responses.get("side", "h")
 
