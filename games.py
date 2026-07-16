@@ -327,7 +327,6 @@ async def _score_pair(roll_channel, form, bot_user, bot, me_total, you_total, *,
             await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
             self_won = state["self_score"] >= first_to
             winner_id = bot_user.id if self_won else form["ticket_user_id"]
-            await send_channel(ticket_channel, f"<@{winner_id}> won!")
             await end_game(ticket_channel, form, self_won, bot_user, bot)
             return True
 
@@ -651,7 +650,6 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
     if state["self_score"] >= first_to or state["adder_score"] >= first_to:
         self_won = state["self_score"] >= first_to
         winner_id = bot_user.id if self_won else form["ticket_user_id"]
-        await send_channel(ticket_channel, f"<@{winner_id}> won!")
         await end_game(ticket_channel, form, self_won, bot_user, bot)
         return
 
