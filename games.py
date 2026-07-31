@@ -298,10 +298,10 @@ async def _start_next_round(roll_channel, form, bot_user, bot):
         _try_activate_queued_user_rolls(state, form["ticket_user_id"], bot_user.id)
 
 
-def _apply_bot_roll_bonus(me_total, gamemode):
-    """House roll bonus — e.g. plus1 treats 3&4 as 8."""
+def _apply_bot_roll_bonus(me_total, gamemode, roll_mode):
+    """House roll bonus — plus1: +1 normal, -1 crazy (e.g. 3&4 → 8 / 6)."""
     if gamemode == "plus1":
-        return me_total + 1
+        return me_total - 1 if roll_mode == "crazy" else me_total + 1
     return me_total
 
 
@@ -321,7 +321,7 @@ async def _score_pair(roll_channel, form, bot_user, bot, me_total, you_total, *,
     state = form["game_state"]
     state["scoring"] = True
     try:
-        me_total = _apply_bot_roll_bonus(me_total, state["gamemode"])
+        me_total = _apply_bot_roll_bonus(me_total, state["gamemode"], state["mode"])
         winner = _pair_winner(me_total, you_total, state["gamemode"], state["mode"])
         ticket_channel = await get_ticket_channel(bot, form, fallback=roll_channel)
 
