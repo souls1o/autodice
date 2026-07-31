@@ -292,17 +292,82 @@ def build_confirm_text(channel, form, bot_user):
     mode = responses.get("mode", "normal")
     side = responses.get("side", "h")
 
-    gamemode_text = {
-        "7s": f", {bot_user.mention} wins ALL 7s",
-        "7s_ties": f", {bot_user.mention} wins ALL 7s and ties",
-        "ties": f", {bot_user.mention} wins ties",
-        "fair": "",
-        "plus1": f", {bot_user.mention} gets +1 on rolls (−1 crazy)",
-    }.get(gamemode_key, "wins 7s")
+    if gamemode_key == "plus1":
+        if mode == "crazy":
+            gamemode_text = f", {bot_user.mention} gets -1 on rolls"
+        else:
+            gamemode_text = f", {bot_user.mention} gets +1 on rolls"
+    else:
+        gamemode_text = {
+            "7s": f", {bot_user.mention} wins ALL 7s",
+            "7s_ties": f", {bot_user.mention} wins ALL 7s and ties",
+            "ties": f", {bot_user.mention} wins ties",
+            "fair": "",
+        }.get(gamemode_key, "wins 7s")
 
     if game == "dice":
-        return f"{first_to} {mode} {first}{gamemode_text}"
+        # Normal mode: omit mode word entirely (e.g. "ft3 @bot 1, ...")
+        mode_part = f"{mode} " if mode and mode != "normal" else ""
+        return f"{first_to} {mode_part}{first}{gamemode_text}"
     return f"cf {first_to} {first} {side}"
+
+
+async def _fund_from_hold_or_saved_address(channel, form):
+    """
+    If hold covers the wager, reuse it (no address ask).
+    If shortfall remains and a payout address is on file, send only the shortfall.
+    Returns True if funding is fully handled (caller should skip listen_address).
+    """
+    his_bet_usd, my_bet_usd, coin = get_bet_info(form)
+    wager_usd = my_bet_usd
+    hold_usd = max(form.get("winnings_usd", 0), 0)
+    from_hold = round(min(hold_usd, wager_usd), 2)
+    shortfall = round(wager_usd - from_hold, 2)
+    address = form.get("payout_address")
+
+    if wager_usd <= 0:
+        return False
+
+    if shortfall <= 0:
+        form["pending_hold_deduct"] = from_hold
+        form["pending_wager_usd"] = wager_usd
+        form["waiting_for_address"] = False
+        await send_channel(
+            channel,
+            f"♻️ **Reusing `${format_bet_display(wager_usd)}` from hold "
+            f"(`{format_bet_display(my_bet_usd)}v{format_bet_display(his_bet_usd)}`)**",
+        )
+        save_session_from_form(channel.id, form)
+        return True
+
+    if not address:
+        return False
+
+    try:
+        amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
+    except Exception as exc:
+        print(f"[_fund_from_hold_or_saved_address] price lookup failed: {exc}")
+        await send_channel(channel, "❌ Could not price top-up.")
+        return False
+
+    result = await send_apirone(coin, address, amount)
+    if "error" in result:
+        err = result["error"]
+        await send_channel(
+            channel,
+            f"❌ Transfer failed: {err if isinstance(err, str) else err}",
+        )
+        return False
+
+    form["pending_hold_deduct"] = from_hold
+    form["pending_wager_usd"] = wager_usd
+    form["waiting_for_address"] = False
+    await send_channel(
+        channel,
+        f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",
+    )
+    save_session_from_form(channel.id, form)
+    return True
 
 
 async def start_ticket_form(channel, bot_user, bot=None):
@@ -353,6 +418,10 @@ async def ask_next_step(channel, bot_user):
         return
 
     if q["type"] == "listen_address":
+        if await _fund_from_hold_or_saved_address(channel, form):
+            form["step"] += 1
+            await ask_next_step(channel, bot_user)
+            return
         bet_parts = responses.get("bet", "").split()
         dynamic.update({
             "coin": normalize_coin(bet_parts[-1]),
@@ -576,11 +645,6 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                 await send_channel(
                     message.channel,
                     f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",
-                )
-            elif from_hold > 0:
-                await send_channel(
-                    message.channel,
-                    f"✅ Address saved — `${format_bet_display(from_hold)}` will come from hold after confirm.",
                 )
 
             form["waiting_for_address"] = False
