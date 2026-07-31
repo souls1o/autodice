@@ -42,8 +42,9 @@ COIN_ADDRESS_COMMANDS = {"!ltc": "ltc", "!btc": "btc", "!eth": "eth"}
 DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
 1. **I Win ALL 7's** — FT3 → 2x | FT5 → 3x Bet
 2. **I Win ALL 7's & Ties** — FT3 → 3x | FT5 → 3.5x Bet
-3. **I Win Ties** — FT3 → 10% MORE | FT5 → 25% MORE Bet
-4. **Fair** — 15% LESS Bet"""
+3. **I Win Ties** — FT3 → 20% MORE | FT5 → 25% MORE Bet
+4. **Fair** — 15%-20% LESS Bet
+5. **I Get +1 on Rolls** — FT3 → 1.5x | FT5 → 2x Bet (3&4 = 8)"""
 
 
 def build_dm_gamemodes_text():
@@ -296,6 +297,7 @@ def build_confirm_text(channel, form, bot_user):
         "7s_ties": f", {bot_user.mention} wins ALL 7s and ties",
         "ties": f", {bot_user.mention} wins ties",
         "fair": "",
+        "plus1": f", {bot_user.mention} gets +1 on rolls",
     }.get(gamemode_key, "wins 7s")
 
     if game == "dice":

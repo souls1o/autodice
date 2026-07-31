@@ -33,6 +33,19 @@ from state import (
 )
 
 bot = commands.Bot(command_prefix="!", self_bot=True)
+_auto_post_index = 0
+
+
+def next_auto_post_message():
+    """Return the next AUTO_POST_MESSAGES entry in order, wrapping to the start."""
+    global _auto_post_index
+    messages = getattr(config, "AUTO_POST_MESSAGES", None) or []
+    if not messages:
+        legacy = getattr(config, "AUTO_POST_MESSAGE", "")
+        return legacy
+    msg = messages[_auto_post_index % len(messages)]
+    _auto_post_index = (_auto_post_index + 1) % len(messages)
+    return msg
 
 
 def _find_lf_players_channel():
@@ -81,8 +94,9 @@ async def send_auto_post():
             print(f"[auto_post] no #{config.AUTO_POST_CHANNEL_NAME} channel found")
         return
 
+    content = next_auto_post_message()
     try:
-        await send_channel(channel, config.AUTO_POST_MESSAGE)
+        await send_channel(channel, content)
     except (discord.NotFound, discord.Forbidden) as exc:
         print(f"[auto_post] send failed in #{getattr(channel, 'name', '?')} (`{channel.id}`): {exc}")
         if is_auto_post_channel_manual():
@@ -93,7 +107,7 @@ async def send_auto_post():
         set_auto_post_channel_id(fallback.id)
         print(f"[auto_post] switched to #{fallback.name} (`{fallback.id}`)")
         try:
-            await send_channel(fallback, config.AUTO_POST_MESSAGE)
+            await send_channel(fallback, content)
         except (discord.NotFound, discord.Forbidden) as retry_exc:
             print(f"[auto_post] fallback send failed: {retry_exc}")
 

@@ -8,6 +8,7 @@ GAMEMODE_LABELS = {
     "7s_ties": "I Win ALL 7's & Ties",
     "ties": "I Win Ties",
     "fair": "Fair",
+    "plus1": "I Get +1 on Rolls",
 }
 
 

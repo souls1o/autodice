@@ -51,13 +51,21 @@ CHANNEL_BLACKLIST = [
     "lf-players"
 ]
 
-AUTO_POST_MESSAGE = """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`
+# Posted in order each auto-post cycle; wraps back to the first after the last.
+AUTO_POST_MESSAGES = [
+    """**[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`
 [<:Dices:1259259866254676049>] __I Win ALL 7's & Ties__ | FT3 → `3x Bet` / FT5 → `3.5x Bet`
-[<:Dices:1259259866254676049>] __I Win Ties__ | FT3 → `10% MORE BET` / FT5 → `25% MORE Bet`
-[<:Dices:1259259866254676049>] __Fair__ | FT3/FT5 → `15%-10% LESS Bet`**
+[<:Dices:1259259866254676049>] __I Win Ties__ | FT3 → `20% MORE BET` / FT5 → `25% MORE Bet`
+[<:Dices:1259259866254676049>] __Fair__ | FT3/FT5 → `15%-20% LESS Bet`**
 > 🤖 **Make a Ticket - I'M AUTOMATED (MIN: __$1__ | MAX: __$200__)** <:BTC:1450767429465800878><:eth:1289062489363058708><:ltc:1259292428175806504>
-"""
-# [<:Coin:1259259605255720980>] FT3/FT5 → `15% LESS Bet` | __Fair__**
+""",
+    """**[<:Dices:1259259866254676049>] __I Get +1 on Rolls__ | FT3 → `1.5x Bet` / FT5 → `2x Bet`
+[<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`
+[<:Dices:1259259866254676049>] __I Win ALL 7's & Ties__ | FT3 → `3x Bet` / FT5 → `3.5x Bet`
+[<:Dices:1259259866254676049>] __Fair__ | FT3/FT5 → `15%-20% LESS Bet`**
+> 🤖 **Make a Ticket - I'M AUTOMATED (MIN: __$1__ | MAX: __$200__)** <:BTC:1450767429465800878><:eth:1289062489363058708><:ltc:1259292428175806504>
+""",
+]
 
 FORM_QUESTIONS = [
     {
@@ -78,8 +86,9 @@ FORM_QUESTIONS = [
         "text": """<:Dices:1259259866254676049> **Which gamemode would you like to play?**
 1. `I Win ALL 7's — FT3 → 2x | FT5 → 3x Bet`
 2. `I Win ALL 7's & Ties — FT3 → 3x | FT5 → 3.5x Bet`
-3. `I Win Ties — FT3 → 10% | FT5 → 25% MORE Bet`
-4. `Fair — 15%-10% LESS Bet`
+3. `I Win Ties — FT3 → 20% | FT5 → 25% MORE Bet`
+4. `Fair — 15%-20% LESS Bet`
+5. `I Get +1 on Rolls — FT3 → 1.5x | FT5 → 2x Bet`
 
 -# @mention
 """,
@@ -87,7 +96,8 @@ FORM_QUESTIONS = [
             "7s": ["1"],
             "7s_ties": ["2"],
             "ties": ["3"],
-            "fair": ["4"]
+            "fair": ["4"],
+            "plus1": ["5"],
         },
         "only_for": ["dice"],
         "short_key": "gamemode"

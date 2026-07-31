@@ -39,9 +39,6 @@ except ImportError:
     print("❌ Run: pip install solana solders")
     sol_client = None
 
-async def send_emoji_msg(channel, content: str):
-    await channel.send(content + " ✨")
-
 # ====================== EVENTS ======================
 @bot.event
 async def on_ready():
@@ -52,7 +49,7 @@ async def on_ready():
 async def auto_post():
     channel = bot.get_channel(config.AUTO_POST_CHANNEL_ID)
     if channel:
-        await send_emoji_msg(channel, config.AUTO_POST_MESSAGE)
+        await channel.send(config.AUTO_POST_MESSAGES[0])
 
 # ====================== TICKET DETECTION ======================
 @bot.event
@@ -86,8 +83,6 @@ async def start_ticket_form(channel):
             if not msg.author.bot:
                 ticket_user_id = msg.author.id
                 break
-
-    await send_emoji_msg(channel, "👋 Hello! Starting form...")
 
     active_forms[channel.id] = {
         "ticket_user_id": ticket_user_id,
@@ -171,9 +166,9 @@ async def ask_next_step(channel):
     question_text = format_text(q.get("text", ""), mention, form.get("responses", {}), dynamic)
 
     if q["type"] == "choice":
-        await send_emoji_msg(channel, f"**Q{form['step']+1}:** {question_text}\nReply with a valid option.")
+        await channel.send(question_text)
     elif q["type"] == "open":
-        await send_emoji_msg(channel, f"**Q{form['step']+1}:** {question_text}")
+        await channel.send(question_text)
     else:
         # Special handling for listen_address
         if q["type"] == "listen_address":
@@ -184,7 +179,7 @@ async def ask_next_step(channel):
             question_text = format_text(q.get("text", ""), mention, form.get("responses", {}), dynamic)
             form["waiting_for_address"] = True
 
-        await send_emoji_msg(channel, question_text)
+        await channel.send(question_text)
         if q["type"] == "listen_confirm":
             form["waiting_for_confirm"] = True
 
@@ -270,7 +265,7 @@ async def process_solana_transfer(channel, recipient_str: str, form):
         tx = VersionedTransaction(msg, [keypair])
         result = await sol_client.send_raw_transaction(tx.serialize())
 
-        await send_emoji_msg(channel, f"💸 Sent to `{recipient_str}` | Tx: https://solscan.io/tx/{result.value}")
+        await channel.send(f"💸 Sent to `{recipient_str}` | Tx: https://solscan.io/tx/{result.value}")
     except Exception as e:
         await channel.send(f"❌ Transfer error: {e}")
 
@@ -282,7 +277,7 @@ async def finish_form(channel, form):
         mention=mention,
         **form.get("responses", {})
     )
-    await send_emoji_msg(channel, final_msg)
+    await channel.send(final_msg)
     active_forms.pop(channel.id, None)
 
 if __name__ == "__main__":

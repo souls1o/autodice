@@ -62,6 +62,8 @@ def get_max_bet(form):
         return 200
     if gamemode == "ties":
         return 200
+    if gamemode == "plus1":
+        return 200
     return 50
 
 
@@ -94,9 +96,13 @@ def calculate_my_bet(form):
     if gamemode == "7s_ties" and first_to == "ft5":
         return round(his_bet * 3.5, 2)
     if gamemode == "ties" and first_to == "ft3":
-        return round(his_bet * 1.1, 2)
+        return round(his_bet * 1.2, 2)
     if gamemode == "ties" and first_to == "ft5":
-        return round(his_bet * 1.25, 2)
+        return round(his_bet * 1.3, 2)
+    if gamemode == "plus1" and first_to == "ft3":
+        return round(his_bet * 1.5, 2)
+    if gamemode == "plus1" and first_to == "ft5":
+        return round(his_bet * 2, 2)
     if gamemode == "fair":
         if his_bet >= 200:
             return round(his_bet * 0.9, 2)
