@@ -13,6 +13,8 @@ from bets import (
     get_price,
     get_wager_usd,
     normalize_coin,
+    add_winnings_usd,
+    sync_winnings_crypto,
     usd_to_smallest_unit,
 )
 from services import create_apirone_address, send_apirone
@@ -359,7 +361,10 @@ async def _fund_from_hold_or_saved_address(channel, form):
         )
         return False
 
-    form["pending_hold_deduct"] = from_hold
+    # Credit top-up into hold so the full wager can be staked from hold on confirm
+    add_winnings_usd(form, shortfall, coin)
+    sync_winnings_crypto(form)
+    form["pending_hold_deduct"] = wager_usd
     form["pending_wager_usd"] = wager_usd
     form["waiting_for_address"] = False
     await send_channel(
@@ -642,6 +647,9 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                         f"❌ Transfer failed: {err if isinstance(err, str) else err}",
                     )
                     return
+                add_winnings_usd(form, shortfall, coin)
+                sync_winnings_crypto(form)
+                from_hold = wager_usd
                 await send_channel(
                     message.channel,
                     f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",

@@ -131,7 +131,7 @@ async def record_winnings(channel, form, self_won):
 
 
 async def send_rerun_shortfall_before_confirm(channel, form):
-    """Send crypto shortfall BEFORE confirmation. Never touches hold."""
+    """Send crypto shortfall BEFORE confirmation; credit that amount into hold."""
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
     wager_usd = my_bet_usd
     winnings_usd = max(form.get("winnings_usd", 0), 0)
@@ -166,7 +166,12 @@ async def send_rerun_shortfall_before_confirm(channel, form):
         err = result["error"]
         await send_channel(channel, f"❌ Rerun transfer failed: {err if isinstance(err, str) else err}")
         return False
+
+    # Top-up becomes part of hold so confirm can stake the full wager from hold
+    add_winnings_usd(form, shortfall, coin)
+    sync_winnings_crypto(form)
     form["rerun_shortfall_sent"] = shortfall
+    form["pending_hold_deduct"] = wager_usd
     await send_channel(
         channel,
         f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun",
