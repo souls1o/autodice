@@ -53,11 +53,11 @@ def get_max_bet(form):
     gamemode = responses.get("gamemode")
     first_to = responses.get("first_to")
     if gamemode == "7s_ties" and first_to == "ft5":
-        return 50
+        return 65
     if (gamemode == "7s" and first_to == "ft5") or (gamemode == "7s_ties" and first_to == "ft3"):
         return 75
     if gamemode == "7s" and first_to == "ft3":
-        return 100
+        return 200
     if gamemode == "fair":
         return 200
     if gamemode == "ties":
