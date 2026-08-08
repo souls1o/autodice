@@ -288,9 +288,25 @@ def _fmt_pct(fraction):
     return f"{float(fraction) * 100:.1f}%".replace(".0%", "%")
 
 
+def next_level_wager_amount(level):
+    """Cumulative wagered required to reach the next level, or None at max."""
+    level = min(max(int(level or 1), 1), MAX_LEVEL)
+    if level >= MAX_LEVEL:
+        return None
+    return float(LEVEL_XP[level])
+
+
+def wagered_until_next_level(wagered, level):
+    nxt = next_level_wager_amount(level)
+    if nxt is None:
+        return 0.0
+    return max(0.0, round(float(nxt) - float(wagered or 0), 2))
+
+
 async def build_profile_text(discord_id):
     user = await ensure_user(discord_id)
     level = int(user.get("level", 1))
+    wagered = round(float(user.get("wagered", 0) or 0), 2)
     rb_pct, fair_edge = perks_for_level(level)
     # Prefer stored perks (kept in sync), fall back to level table.
     rb_pct = float(user.get("rakeback_pct", rb_pct))
@@ -300,11 +316,20 @@ async def build_profile_text(discord_id):
     if 0 < claimable < MIN_RAKEBACK_CLAIM:
         claim_note = f" _(min {_fmt_money(MIN_RAKEBACK_CLAIM)} to use in tickets)_"
 
+    nxt = next_level_wager_amount(level)
+    if nxt is None:
+        wagered_note = " *(max level)*"
+        level_note = f" *({_fmt_money(wagered)}/max)*"
+    else:
+        remaining = wagered_until_next_level(wagered, level)
+        wagered_note = f" *({_fmt_money(remaining)} more to level up)*"
+        level_note = f" *({_fmt_money(wagered)}/{_fmt_money(nxt)})*"
+
     return "\n".join([
         "**👤 Profile**",
-        f"**Wagered:** {_fmt_money(user.get('wagered', 0))}",
+        f"**Wagered:** {_fmt_money(wagered)}{wagered_note}",
         f"**Profit:** {_fmt_money(user.get('profit', 0))}",
-        f"**Level:** {level}/{MAX_LEVEL}",
+        f"**Level:** {level}/{MAX_LEVEL}{level_note}",
         f"**Rakeback:** {_fmt_pct(rb_pct)}",
         f"**Fair edge:** {_fmt_pct(fair_edge)}",
         f"**Claimable rakeback:** {_fmt_money(claimable)}{claim_note}",
