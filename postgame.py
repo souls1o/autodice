@@ -111,13 +111,16 @@ async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=Non
 
 
 async def record_winnings(channel, form, self_won):
+    from bets import is_rakeback_bet
+
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
     form.setdefault("winnings_usd", 0.0)
     form.setdefault("winnings_crypto", 0.0)
     form["winnings_coin"] = coin
     stake_from_hold = form.pop("stake_from_hold", False)
     if self_won:
-        amount = my_bet_usd + his_bet_usd
+        # Rakeback games: player stake isn't crypto — only recover house wager into hold.
+        amount = my_bet_usd if is_rakeback_bet(form) else (my_bet_usd + his_bet_usd)
         try:
             await asyncio.to_thread(add_winnings_usd, form, amount, coin)
         except Exception as exc:
@@ -381,7 +384,6 @@ async def start_new_form_from_yes(channel, form, bot_user, bot=None):
     ticket_user_id = form["ticket_user_id"]
     payout_address = form.get("payout_address")
     funds_recipient_id = form.get("funds_recipient_id")
-    mm_commands_sent = form.get("mm_commands_sent")
 
     active_forms.pop(channel.id, None)
     new_form = new_form_dict(channel.id, ticket_user_id)
@@ -389,8 +391,6 @@ async def start_new_form_from_yes(channel, form, bot_user, bot=None):
         new_form["payout_address"] = payout_address
     if funds_recipient_id:
         new_form["funds_recipient_id"] = funds_recipient_id
-    if mm_commands_sent:
-        new_form["mm_commands_sent"] = True
     active_forms[channel.id] = new_form
     from users import attach_user_to_form
     await attach_user_to_form(new_form)

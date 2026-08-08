@@ -96,8 +96,6 @@ def save_session_from_form(channel_id, form):
         session["game_confirmer_user_id"] = form["game_confirmer_user_id"]
     if form.get("payout_address"):
         session["payout_address"] = form["payout_address"]
-    if form.get("mm_commands_sent"):
-        session["mm_commands_sent"] = True
     if form.get("responses"):
         session["responses"] = dict(form["responses"])
     if form.get("game_started"):
@@ -116,8 +114,6 @@ def form_from_session(channel_id):
         form["payout_address"] = session["payout_address"]
     if session.get("funds_recipient_id"):
         form["funds_recipient_id"] = session["funds_recipient_id"]
-    if session.get("mm_commands_sent"):
-        form["mm_commands_sent"] = True
     form["total_wagered_usd"] = session.get("total_wagered_usd", 0.0)
     return form
 
@@ -188,8 +184,6 @@ def new_form_dict(channel_id, ticket_user_id):
         form["payout_address"] = session["payout_address"]
     if session.get("funds_recipient_id"):
         form["funds_recipient_id"] = session["funds_recipient_id"]
-    if session.get("mm_commands_sent"):
-        form["mm_commands_sent"] = True
     return form
 
 

@@ -42,6 +42,7 @@ from state import (
 from users import (
     attach_user_to_form,
     build_mm_ticket_commands_dm,
+    claim_mm_ticket_commands_notify,
     try_apply_rakeback_bet,
 )
 
@@ -726,16 +727,19 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                     f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",
                 )
 
-            is_new_mm = not form.get("mm_commands_sent")
             form["waiting_for_address"] = False
             form["payout_address"] = address
             form["funds_recipient_id"] = recipient_id
             form["pending_hold_deduct"] = from_hold
             form["pending_wager_usd"] = wager_usd
-            if is_new_mm:
-                form["mm_commands_sent"] = True
             save_session_from_form(message.channel.id, form)
-            if is_new_mm:
+            # DM ticket commands only the first time this MM is ever seen.
+            try:
+                should_notify = await claim_mm_ticket_commands_notify(recipient_id)
+            except Exception as exc:
+                print(f"[mm_commands] claim failed for {recipient_id}: {exc}")
+                should_notify = False
+            if should_notify:
                 await _notify_mm_ticket_commands(message.channel, recipient_id)
             form["step"] += 1
             await ask_next_step(message.channel, bot_user)

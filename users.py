@@ -53,6 +53,7 @@ def _default_user(discord_id):
         "rakeback_pct": rakeback_pct,
         "fair_edge": fair_edge,
         "rakeback_balance": 0.0,
+        "ticket_commands_sent": False,
         "created_at": now,
         "updated_at": now,
     }
@@ -76,6 +77,24 @@ async def ensure_user(discord_id):
 
 async def get_user(discord_id):
     return await ensure_user(discord_id)
+
+
+async def claim_mm_ticket_commands_notify(discord_id):
+    """
+    Mark an MM as having received ticket-command DMs (once ever).
+    Returns True only on the first successful claim — caller should DM + ping.
+    """
+    await ensure_user(discord_id)
+    result = await users_collection.update_one(
+        {"_id": _user_id(discord_id), "ticket_commands_sent": {"$ne": True}},
+        {
+            "$set": {
+                "ticket_commands_sent": True,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+    return result.modified_count > 0
 
 
 def apply_user_perks_to_form(form, user):
