@@ -185,11 +185,6 @@ def add_wagered_usd(form, amount=None):
     form["total_wagered_usd"] = round(form.get("total_wagered_usd", 0) + amount, 8)
 
 
-def ticket_profit_usd(form):
-    profit = form.get("winnings_usd", 0) - form.get("total_wagered_usd", 0)
-    return profit if profit > 0 else 0.0
-
-
 def add_winnings_usd(form, usd, coin):
     form["winnings_usd"] = round(form.get("winnings_usd", 0) + usd, 8)
     form["winnings_crypto"] = round(form.get("winnings_crypto", 0) + usd_to_crypto_amount(usd, coin), 8)

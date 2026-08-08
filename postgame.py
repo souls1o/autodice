@@ -15,7 +15,6 @@ from bets import (
     get_wager_usd,
     subtract_winnings_usd,
     sync_winnings_crypto,
-    ticket_profit_usd,
     usd_to_crypto_amount,
     usd_to_smallest_unit,
 )
@@ -35,12 +34,6 @@ def _parse_game_number(content):
         return None
     match = GAME_NUMBER_PATTERN.search(content)
     return int(match.group(1)) if match else None
-
-
-def tip_amount(profit_usd):
-    if profit_usd <= 0:
-        return 0.0
-    return round(profit_usd * 0.03, 2)
 
 
 async def get_next_game_number(guild, bot=None):
@@ -250,9 +243,7 @@ async def payout_winnings_if_any(channel, form):
         coin = form.get("winnings_coin", "ltc")
         address = await create_apirone_address(coin)
         if address:
-            tip = tip_amount(ticket_profit_usd(form))
-            tip_line = f" (*YOUR TIP*: `${tip}`)" if tip > 0 else ""
-            await send_channel(channel, f"`{address}`{tip_line}")
+            await send_channel(channel, f"`{address}`")
         else:
             await send_channel(channel, f"❌ Failed to generate {coin.upper()} address.")
     # Keep hold in session — !hold must never clear
