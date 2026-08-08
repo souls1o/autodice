@@ -326,7 +326,7 @@ async def build_profile_text(discord_id):
         "**👤 Profile**",
         f"Wagered: `{_fmt_money(wagered)}{wagered_note}`",
         f"Profit: `{_fmt_money(user.get('profit', 0))}`",
-        f"Level: `{level}/{MAX_LEVEL}{level_note}`",
+        f"Level: `{level}/{MAX_LEVEL}`{level_note}",
         f"Rakeback Rate: `{_fmt_pct(rb_pct)}` *(+0.5% each level)*",
         f"Fair House Edge: `{_fmt_pct(fair_edge)}` *(-1% each level)*",
         f"Rakeback: `{_fmt_money(claimable)}` *($1 minimum claim)*",
