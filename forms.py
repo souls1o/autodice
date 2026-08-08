@@ -76,6 +76,7 @@ def build_dm_help_text(user_id):
         "**📖 Commands**",
         "`!help` — show this list",
         "`!profile` — wagered, profit, level, rakeback & fair edge",
+        "`!notifications` — toggle announcement DMs on/off",
         "`!gamemodes` — dice gamemode info",
         "`!housebal` — house balance in USD (BTC, ETH, LTC)",
         "",

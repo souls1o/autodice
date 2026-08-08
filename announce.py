@@ -58,14 +58,17 @@ async def _prepare_dm_channel(channel):
 async def broadcast_announcement(bot, source_message):
     """
     Send source_message content/embeds/attachments to every DMChannel,
-    including message-request DMs. Returns (ok_count, fail_count, total).
+    including message-request DMs. Skips users who opted out via !notifications.
+    Never creates DB users. Returns (ok_count, fail_count, skipped_count, total_candidates).
     """
+    from users import get_announcement_opt_out_ids
+
     content = source_message.content or None
     embeds = _embed_copies(source_message.embeds)
     blobs = await _attachment_blobs(source_message.attachments)
 
     if not content and not embeds and not blobs:
-        return 0, 0, 0
+        return 0, 0, 0, 0
 
     try:
         channels = await bot.fetch_private_channels()
@@ -73,12 +76,22 @@ async def broadcast_announcement(bot, source_message):
         print(f"[announce] fetch_private_channels failed: {exc}")
         channels = list(bot.private_channels)
 
+    try:
+        opted_out = await get_announcement_opt_out_ids()
+    except Exception as exc:
+        print(f"[announce] opt-out lookup failed: {exc}")
+        opted_out = set()
+
     targets = []
+    skipped = 0
     for channel in channels:
         if not isinstance(channel, discord.DMChannel):
             continue
         recipient = getattr(channel, "recipient", None)
         if recipient is not None and bot.user is not None and recipient.id == bot.user.id:
+            continue
+        if recipient is not None and recipient.id in opted_out:
+            skipped += 1
             continue
         targets.append(channel)
 
@@ -92,7 +105,6 @@ async def broadcast_announcement(bot, source_message):
                 kwargs["embeds"] = _embed_copies(source_message.embeds)
             if blobs:
                 kwargs["files"] = _files_from_blobs(blobs)
-            # Discord requires non-empty content or embeds/files
             send_content = content if content else None
             await send_channel(channel, send_content, **kwargs)
             ok += 1
@@ -100,4 +112,4 @@ async def broadcast_announcement(bot, source_message):
             fail += 1
             print(f"[announce] send failed to {channel.id}: {exc}")
 
-    return ok, fail, len(targets)
+    return ok, fail, skipped, len(targets) + skipped

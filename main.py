@@ -218,7 +218,7 @@ async def _handle_message(message: discord.Message):
             await reply_message(message, build_dm_help_text(message.author.id))
             return
         if content == "!profile":
-            # Creates a user profile if missing (only command that does).
+            # Creates a user profile if missing.
             from users import build_profile_text
             try:
                 text = await asyncio.wait_for(
@@ -233,6 +233,25 @@ async def _handle_message(message: discord.Message):
                 )
                 return
             await reply_message(message, text)
+            return
+        if content == "!notifications":
+            from users import toggle_notifications
+            try:
+                enabled, _created = await asyncio.wait_for(
+                    toggle_notifications(message.author.id),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !notifications failed for {message.author.id}: {exc}")
+                await reply_message(
+                    message,
+                    "❌ Could not update notifications (database timeout). Try again in a moment.",
+                )
+                return
+            if enabled:
+                await reply_message(message, "🔔 Announcement notifications **enabled**.")
+            else:
+                await reply_message(message, "🔕 Announcement notifications **disabled**.")
             return
         if content == "!gamemodes":
             await reply_message(message, build_dm_gamemodes_text())
@@ -253,26 +272,26 @@ async def _handle_message(message: discord.Message):
                     message,
                     "Usage: reply to a message with `!announce` — that message "
                     "(content, embeds, attachments) is sent to all your DMs, "
-                    "including message requests.",
+                    "including message requests (skips users who disabled `!notifications`).",
                 )
                 return
             await reply_message(message, "📢 Broadcasting announcement to all DMs…")
 
             async def _run_announce():
                 try:
-                    ok, fail, total = await broadcast_announcement(bot, source)
+                    ok, fail, skipped, total = await broadcast_announcement(bot, source)
                     if total == 0:
                         await reply_message(
                             message,
                             "❌ Nothing to send (empty message) or no DM channels found.",
                         )
                         return
-                    await reply_message(
-                        message,
-                        f"✅ Announcement sent to **{ok}/{total}** DMs"
-                        + (f" (**{fail}** failed)" if fail else "")
-                        + ".",
-                    )
+                    parts = [f"✅ Announcement sent to **{ok}/{total}** DMs"]
+                    if skipped:
+                        parts.append(f"**{skipped}** opted out")
+                    if fail:
+                        parts.append(f"**{fail}** failed")
+                    await reply_message(message, " — ".join(parts) + ".")
                 except Exception as exc:
                     print(f"[dm] !announce failed: {exc}")
                     await reply_message(message, f"❌ Announce failed: {exc}")

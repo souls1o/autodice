@@ -56,13 +56,11 @@ AUTO_POST_MESSAGES = [
 """**[<:Dices:1259259866254676049>] __I Win Ties__ | FT3 → `20% HIGHER BET` / FT5 → `30% HIGHER Bet`
 [<:Dices:1259259866254676049>] __Fair__ | FT3/FT5 → `10% LOWER Bet`**
 > 🤖 **Make a Ticket - I'M AUTOMATED (__$1-$200__)** <:eth:1289062489363058708><:ltc:1259292428175806504>
-📢 **RAKEBACK ADDED - !profile in DMS** 💸
 """,
 """**[<:Dices:1259259866254676049>] __I Win ALL 7's & Ties__ | FT3 → `3x Bet` / FT5 → `3.5x Bet`
 [<:Dices:1259259866254676049>] __I Win ALL 7's__ | FT3 → `2x Bet` / FT5 → `3x Bet`
 [<:Dices:1259259866254676049>] __I Get +1 on Rolls__ | FT3 → `1.5x Bet` / FT5 → `2x Bet`**
 > 🤖 **Make a Ticket - I'M AUTOMATED (__$1-$200__)** <:eth:1289062489363058708><:ltc:1259292428175806504>
-📢 **RAKEBACK ADDED - !profile in DMS** 💸
 """,
 ]
 
