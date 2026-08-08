@@ -7,7 +7,7 @@ from services import db
 users_collection = db.users
 
 # Level thresholds by cumulative XP ($1 wagered = 1 XP). Level 1 at $0 wagered.
-LEVEL_XP = [0, 250, 1250, 5000]
+LEVEL_XP = [0, 250, 1250, 3750]
 MAX_LEVEL = 4
 
 # level -> (rakeback_pct, fair_edge)
@@ -312,9 +312,6 @@ async def build_profile_text(discord_id):
     rb_pct = float(user.get("rakeback_pct", rb_pct))
     fair_edge = float(user.get("fair_edge", fair_edge))
     claimable = round(float(user.get("rakeback_balance", 0)), 2)
-    claim_note = ""
-    if 0 < claimable < MIN_RAKEBACK_CLAIM:
-        claim_note = f" _(min {_fmt_money(MIN_RAKEBACK_CLAIM)} to use in tickets)_"
 
     nxt = next_level_wager_amount(level)
     if nxt is None:
@@ -330,9 +327,9 @@ async def build_profile_text(discord_id):
         f"**Wagered:** {_fmt_money(wagered)}{wagered_note}",
         f"**Profit:** {_fmt_money(user.get('profit', 0))}",
         f"**Level:** {level}/{MAX_LEVEL}{level_note}",
-        f"**Rakeback:** {_fmt_pct(rb_pct)}",
-        f"**Fair edge:** {_fmt_pct(fair_edge)}",
-        f"**Claimable rakeback:** {_fmt_money(claimable)}{claim_note}",
+        f"**Rakeback:** {_fmt_pct(rb_pct)} *(+0.5% each level)*",
+        f"**Fair edge:** {_fmt_pct(fair_edge)} *(-1% each level)*",
+        f"**Claimable rakeback:** {_fmt_money(claimable)} *($1 minimum claim)*",
     ])
 
 
