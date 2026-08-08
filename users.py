@@ -292,6 +292,46 @@ async def build_profile_text(discord_id):
     ])
 
 
+def parse_discord_user_id(raw, *, mentions=None):
+    """Parse a snowflake, <@id>, or first mention into an int user id."""
+    text = (raw or "").strip()
+    if not text and mentions:
+        return int(mentions[0].id)
+    if text.startswith("<@") and text.endswith(">"):
+        text = text[2:-1]
+        if text.startswith("!"):
+            text = text[1:]
+    return int(text)
+
+
+async def admin_add_wager(target_user_id, amount_usd):
+    """
+    Admin helper: add wagered USD, recompute level/perks, credit rakeback.
+    Returns (ok, message).
+    """
+    try:
+        amount = float(amount_usd)
+    except (TypeError, ValueError):
+        return False, "❌ Amount must be a number."
+    if amount <= 0:
+        return False, "❌ Amount must be greater than 0."
+
+    before = await ensure_user(target_user_id)
+    before_rb = round(float(before.get("rakeback_balance", 0)), 4)
+    user = await add_user_wagered(target_user_id, amount, credit_rakeback=True)
+    rb_gained = round(float(user.get("rakeback_balance", 0)) - before_rb, 4)
+
+    return True, "\n".join([
+        f"✅ Added **{_fmt_money(amount)}** wagered to <@{target_user_id}>",
+        f"**Wagered:** {_fmt_money(user.get('wagered', 0))}",
+        f"**Level:** {int(user.get('level', 1))}/{MAX_LEVEL}",
+        f"**Rakeback:** {_fmt_pct(user.get('rakeback_pct', LEVEL_PERKS[1][0]))}",
+        f"**Fair edge:** {_fmt_pct(user.get('fair_edge', LEVEL_PERKS[1][1]))}",
+        f"**Rakeback credited:** {_fmt_money(rb_gained)}",
+        f"**Claimable rakeback:** {_fmt_money(user.get('rakeback_balance', 0))}",
+    ])
+
+
 def build_mm_ticket_commands_dm():
     return (
         "**🎫 Ticket commands**\n"

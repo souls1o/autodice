@@ -244,6 +244,43 @@ async def _handle_message(message: discord.Message):
         if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
             await reply_message(message, await build_stats_text())
             return
+        if message.author.id == config.ADMIN_USER_ID and content.startswith("!add-wager"):
+            # Usage: !add-wager <amount> [user_id|@mention]
+            from users import admin_add_wager, parse_discord_user_id
+            parts = message.content.strip().split()
+            if len(parts) < 2:
+                await reply_message(
+                    message,
+                    "Usage: `!add-wager <amount> [user_id|@mention]`\n"
+                    "Omit user to add wager to yourself.",
+                )
+                return
+            try:
+                amount = float(parts[1])
+            except ValueError:
+                await reply_message(message, "❌ Amount must be a number.")
+                return
+            target_id = message.author.id
+            if len(parts) >= 3:
+                try:
+                    target_id = parse_discord_user_id(
+                        parts[2],
+                        mentions=message.mentions,
+                    )
+                except (TypeError, ValueError):
+                    await reply_message(message, "❌ Invalid user id / mention.")
+                    return
+            try:
+                ok, text = await asyncio.wait_for(
+                    admin_add_wager(target_id, amount),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !add-wager failed: {exc}")
+                await reply_message(message, "❌ Could not update wager (database timeout).")
+                return
+            await reply_message(message, text)
+            return
         if message.content == "!wallet" and message.author.id == config.ADMIN_USER_ID:
             wallets = await get_wallets()
             lines = ["**Wallets:**"]
