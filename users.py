@@ -54,7 +54,6 @@ def _default_user(discord_id):
         "fair_edge": fair_edge,
         "rakeback_balance": 0.0,
         "ticket_commands_sent": False,
-        "notifications_enabled": True,
         "created_at": now,
         "updated_at": now,
     }
@@ -96,49 +95,6 @@ async def claim_mm_ticket_commands_notify(discord_id):
         },
     )
     return result.modified_count > 0
-
-
-async def toggle_notifications(discord_id):
-    """
-    Create the user if missing, then toggle announcement DMs.
-    Returns (enabled: bool, created: bool).
-    """
-    uid = _user_id(discord_id)
-    existing = await users_collection.find_one({"_id": uid})
-    created = existing is None
-    user = await ensure_user(discord_id)
-    # Missing field / new users default to enabled; first toggle turns them off.
-    current = bool(user.get("notifications_enabled", True))
-    enabled = not current
-    await users_collection.update_one(
-        {"_id": uid},
-        {
-            "$set": {
-                "notifications_enabled": enabled,
-                "updated_at": datetime.utcnow(),
-            }
-        },
-    )
-    return enabled, created
-
-
-async def get_announcement_opt_out_ids():
-    """
-    Discord user IDs who disabled announcement DMs.
-    Does not create users — recipients not in the DB are treated as opted in.
-    """
-    opted_out = set()
-    cursor = users_collection.find(
-        {"notifications_enabled": False},
-        {"_id": 1, "discord_id": 1},
-    )
-    async for doc in cursor:
-        raw = doc.get("discord_id", doc.get("_id"))
-        try:
-            opted_out.add(int(raw))
-        except (TypeError, ValueError):
-            continue
-    return opted_out
 
 
 def apply_user_perks_to_form(form, user):

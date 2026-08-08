@@ -234,25 +234,6 @@ async def _handle_message(message: discord.Message):
                 return
             await reply_message(message, text)
             return
-        if content == "!notifications":
-            from users import toggle_notifications
-            try:
-                enabled, _created = await asyncio.wait_for(
-                    toggle_notifications(message.author.id),
-                    timeout=8.0,
-                )
-            except Exception as exc:
-                print(f"[dm] !notifications failed for {message.author.id}: {exc}")
-                await reply_message(
-                    message,
-                    "❌ Could not update notifications (database timeout). Try again in a moment.",
-                )
-                return
-            if enabled:
-                await reply_message(message, "🔔 Announcement notifications **enabled**.")
-            else:
-                await reply_message(message, "🔕 Announcement notifications **disabled**.")
-            return
         if content == "!gamemodes":
             await reply_message(message, build_dm_gamemodes_text())
             return
@@ -262,41 +243,6 @@ async def _handle_message(message: discord.Message):
 
         if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
             await reply_message(message, await build_stats_text())
-            return
-        if message.author.id == config.ADMIN_USER_ID and content in ("!announce", "!announcement"):
-            from announce import broadcast_announcement, resolve_reference_message
-
-            source = await resolve_reference_message(message)
-            if source is None:
-                await reply_message(
-                    message,
-                    "Usage: reply to a message with `!announce` — that message "
-                    "(content, embeds, attachments) is sent to all your DMs, "
-                    "including message requests (skips users who disabled `!notifications`).",
-                )
-                return
-            await reply_message(message, "📢 Broadcasting announcement to all DMs…")
-
-            async def _run_announce():
-                try:
-                    ok, fail, skipped, total = await broadcast_announcement(bot, source)
-                    if total == 0:
-                        await reply_message(
-                            message,
-                            "❌ Nothing to send (empty message) or no DM channels found.",
-                        )
-                        return
-                    parts = [f"✅ Announcement sent to **{ok}/{total}** DMs"]
-                    if skipped:
-                        parts.append(f"**{skipped}** opted out")
-                    if fail:
-                        parts.append(f"**{fail}** failed")
-                    await reply_message(message, " — ".join(parts) + ".")
-                except Exception as exc:
-                    print(f"[dm] !announce failed: {exc}")
-                    await reply_message(message, f"❌ Announce failed: {exc}")
-
-            asyncio.create_task(_run_announce())
             return
         if message.author.id == config.ADMIN_USER_ID and content.startswith("!add-wager"):
             # Usage: !add-wager <amount> [user_id|@mention]
