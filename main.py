@@ -244,6 +244,41 @@ async def _handle_message(message: discord.Message):
         if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
             await reply_message(message, await build_stats_text())
             return
+        if message.author.id == config.ADMIN_USER_ID and content in ("!announce", "!announcement"):
+            from announce import broadcast_announcement, resolve_reference_message
+
+            source = await resolve_reference_message(message)
+            if source is None:
+                await reply_message(
+                    message,
+                    "Usage: reply to a message with `!announce` — that message "
+                    "(content, embeds, attachments) is sent to all your DMs, "
+                    "including message requests.",
+                )
+                return
+            await reply_message(message, "📢 Broadcasting announcement to all DMs…")
+
+            async def _run_announce():
+                try:
+                    ok, fail, total = await broadcast_announcement(bot, source)
+                    if total == 0:
+                        await reply_message(
+                            message,
+                            "❌ Nothing to send (empty message) or no DM channels found.",
+                        )
+                        return
+                    await reply_message(
+                        message,
+                        f"✅ Announcement sent to **{ok}/{total}** DMs"
+                        + (f" (**{fail}** failed)" if fail else "")
+                        + ".",
+                    )
+                except Exception as exc:
+                    print(f"[dm] !announce failed: {exc}")
+                    await reply_message(message, f"❌ Announce failed: {exc}")
+
+            asyncio.create_task(_run_announce())
+            return
         if message.author.id == config.ADMIN_USER_ID and content.startswith("!add-wager"):
             # Usage: !add-wager <amount> [user_id|@mention]
             from users import admin_add_wager, parse_discord_user_id

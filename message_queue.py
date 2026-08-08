@@ -43,8 +43,13 @@ async def _enqueue(send_fn):
     return await future
 
 
-async def send_channel(channel, content, **kwargs):
-    return await _enqueue(lambda: channel.send(content, **kwargs))
+async def send_channel(channel, content=None, **kwargs):
+    async def _do():
+        if content is None:
+            return await channel.send(**kwargs)
+        return await channel.send(content, **kwargs)
+
+    return await _enqueue(_do)
 
 
 async def reply_message(message, content, **kwargs):

@@ -95,6 +95,7 @@ def build_dm_help_text(user_id):
             "**🔧 Admin**",
             "`!stats` — wagered, profit, games, and house balance",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
+            "`!announce` — reply to a message to DM it to all DMs (incl. message requests)",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
             "`!setchannel <id>` — set auto-post channel",
