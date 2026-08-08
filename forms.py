@@ -19,7 +19,7 @@ from bets import (
 )
 from services import create_apirone_address, send_apirone
 from notifications import notify_admin_ticket_added
-from message_queue import reply_message, send_channel
+from message_queue import reply_message, send_channel, send_user
 from state import (
     active_forms,
     cancel_active_form,
@@ -36,16 +36,30 @@ from state import (
     save_session_from_form,
     ticket_channels,
 )
+from users import (
+    attach_user_to_form,
+    build_mm_ticket_commands_dm,
+    try_apply_rakeback_bet,
+)
 
 LISTEN_ROLES = [1258727325265297408, 1258732498482106398, 1505600256350355537]
 VALIDATORS = {"bet_validator": bet_validator}
-COIN_ADDRESS_COMMANDS = {"!ltc": "ltc", "!btc": "btc", "!eth": "eth"}
+COIN_ADDRESS_COMMANDS = {
+    "!ltc": "ltc",
+    "!btc": "btc",
+    "!eth": "eth",
+    "!sol": "sol",
+    "!usdt-bnb": "usdt@bnb",
+    "!usdt-eth": "usdt@eth",
+    "!usdc-bnb": "usdc@bnb",
+    "!usdc-eth": "usdc@eth",
+}
 
 DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
 1. **I Win ALL 7's** — FT3 → 2x | FT5 → 3x Bet
 2. **I Win ALL 7's & Ties** — FT3 → 3x | FT5 → 3.5x Bet
 3. **I Win Ties** — FT3 → 20% HIGHER | FT5 → 30% HIGHER Bet
-4. **Fair** — 10% LOWER Bet
+4. **Fair** — 7–10% LOWER Bet (improves with level)
 5. **I Get +1 on Rolls** — FT3 → 1.5x | FT5 → 2x Bet (normal +1 / crazy −1)"""
 
 
@@ -57,12 +71,16 @@ def build_dm_help_text(user_id):
     lines = [
         "**📖 Commands**",
         "`!help` — show this list",
+        "`!profile` — wagered, profit, level, rakeback & fair edge",
         "`!gamemodes` — dice gamemode info",
         "`!housebal` — house balance in USD (BTC, ETH, LTC)",
         "",
         "**🎫 Ticket commands**",
-        "`!ltc` / `!btc` / `!eth` — get a deposit address",
+        "`!ltc` / `!btc` / `!eth` / `!sol` — get a deposit address",
+        "`!usdt-bnb` / `!usdt-eth` — USDT on BSC / ERC-20",
+        "`!usdc-bnb` / `!usdc-eth` — USDC on BSC / ERC-20",
         "`!hold` — show current winnings for this ticket",
+        "`!profile` — wagered, profit, level, rakeback & fair edge",
         "`!rerun` — rerun with a new bet amount",
         "`!restart` — restart the bet form (only before funds are sent)",
         "`!cancel` — cancel and payout winnings if any",
@@ -128,6 +146,25 @@ async def _member_from_user(channel, user):
         except Exception:
             return None
     return member
+
+
+async def _notify_mm_ticket_commands(channel, recipient_id):
+    """DM deposit/hold commands to a new MM and ping them in the ticket."""
+    member = channel.guild.get_member(recipient_id)
+    if member is None:
+        try:
+            member = await channel.guild.fetch_member(recipient_id)
+        except Exception:
+            member = None
+    if member is not None:
+        try:
+            await send_user(member, build_mm_ticket_commands_dm())
+        except Exception as exc:
+            print(f"[mm_commands] DM failed for {recipient_id}: {exc}")
+    await send_channel(
+        channel,
+        f"<@{recipient_id}> I've sent you my ticket commands.",
+    )
 
 
 async def resolve_funds_recipient(channel, address_message):
@@ -395,7 +432,9 @@ async def start_ticket_form(channel, bot_user, bot=None):
         return
 
     register_ticket_channel(channel.id)
-    active_forms[channel.id] = new_form_dict(channel.id, ticket_user_id)
+    form = new_form_dict(channel.id, ticket_user_id)
+    active_forms[channel.id] = form
+    await attach_user_to_form(form)
     await ask_next_step(channel, bot_user)
 
 
@@ -428,10 +467,11 @@ async def ask_next_step(channel, bot_user):
             await ask_next_step(channel, bot_user)
             return
         bet_parts = responses.get("bet", "").split()
+        _, _, fund_coin = get_bet_info(form)
         dynamic.update({
-            "coin": normalize_coin(bet_parts[-1]),
+            "coin": fund_coin,
             "my_bet": format_bet_display(calculate_my_bet(form) or 0),
-            "his_bet": format_bet_display(bet_parts[0]),
+            "his_bet": format_bet_display(bet_parts[0] if bet_parts else 0),
         })
         question_text = format_text(q.get("text", ""), mention, responses, bot_user, dynamic)
         form["waiting_for_address"] = True
@@ -479,6 +519,17 @@ async def handle_form_step(message, form, bot_user):
         if validator and not validator(response, form):
             await reply_message(message, "❌ Invalid format or out of range.")
             return
+        if q.get("validator") == "bet_validator":
+            handled, err = await try_apply_rakeback_bet(response, form, message.author.id)
+            if handled:
+                if err:
+                    await reply_message(message, err)
+                    return
+                form["step"] += 1
+                await ask_next_step(message.channel, bot_user)
+                return
+            form.pop("rakeback_bet", None)
+            form.pop("rakeback_stake", None)
         if q.get("short_key"):
             form["responses"][q["short_key"]] = response
         form["step"] += 1
@@ -491,10 +542,11 @@ async def handle_ticket_command(message, bot_user, bot=None):
     if content in COIN_ADDRESS_COMMANDS:
         coin = COIN_ADDRESS_COMMANDS[content]
         address = await create_apirone_address(coin)
+        label = coin.upper()
         if address:
             await send_channel(message.channel, f"`{address}`")
         else:
-            await send_channel(message.channel, f"❌ Failed to generate {coin.upper()} address.")
+            await send_channel(message.channel, f"❌ Failed to generate {label} address.")
         return True
 
     if content == "!restart":
@@ -503,6 +555,11 @@ async def handle_ticket_command(message, bot_user, bot=None):
 
     if content == "!hold":
         await handle_hold_command(message)
+        return True
+
+    if content == "!profile":
+        from users import build_profile_text
+        await send_channel(message.channel, await build_profile_text(message.author.id))
         return True
 
     if content == "!rerun":
@@ -655,12 +712,17 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                     f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",
                 )
 
+            is_new_mm = not form.get("mm_commands_sent")
             form["waiting_for_address"] = False
             form["payout_address"] = address
             form["funds_recipient_id"] = recipient_id
             form["pending_hold_deduct"] = from_hold
             form["pending_wager_usd"] = wager_usd
+            if is_new_mm:
+                form["mm_commands_sent"] = True
             save_session_from_form(message.channel.id, form)
+            if is_new_mm:
+                await _notify_mm_ticket_commands(message.channel, recipient_id)
             form["step"] += 1
             await ask_next_step(message.channel, bot_user)
 

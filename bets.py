@@ -74,6 +74,13 @@ def format_bet_display(value):
     return f"{num:.2f}"
 
 
+def is_rakeback_bet(form):
+    if form.get("rakeback_bet"):
+        return True
+    parts = (form.get("responses", {}).get("bet") or "").strip().split()
+    return len(parts) >= 2 and parts[-1].lower() == "rakeback"
+
+
 def calculate_my_bet(form):
     responses = form.get("responses", {})
     try:
@@ -104,14 +111,19 @@ def calculate_my_bet(form):
     if gamemode == "plus1" and first_to == "ft5":
         return round(his_bet * 2, 2)
     if gamemode == "fair":
-        return round(his_bet * 0.9, 2)
+        edge = float(form.get("fair_edge", 0.10))
+        edge = min(max(edge, 0.07), 0.10)
+        return round(his_bet * (1.0 - edge), 2)
     return None
 
 
 def get_bet_info(form):
     parts = form.get("responses", {}).get("bet", "0 ltc").split()
     his_bet_usd = float(parts[0])
-    coin = normalize_coin(parts[-1])
+    if len(parts) >= 2 and parts[-1].lower() == "rakeback":
+        coin = normalize_coin(form.get("winnings_coin") or "ltc")
+    else:
+        coin = normalize_coin(parts[-1])
     my_bet_usd = calculate_my_bet(form) or 0.0
     return his_bet_usd, my_bet_usd, coin
 
@@ -193,6 +205,9 @@ def get_ticket_hold_usd(form):
 
 
 def bet_validator(response, form=None):
+    text = response.strip().lower()
+    if text in ("rakeback", "rb"):
+        return True
     parts = response.strip().split()
     if len(parts) != 2:
         return False

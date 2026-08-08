@@ -213,6 +213,10 @@ async def _handle_message(message: discord.Message):
         if content == "!help":
             await reply_message(message, build_dm_help_text(message.author.id))
             return
+        if content == "!profile":
+            from users import build_profile_text
+            await reply_message(message, await build_profile_text(message.author.id))
+            return
         if content == "!gamemodes":
             await reply_message(message, build_dm_gamemodes_text())
             return

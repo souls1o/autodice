@@ -675,12 +675,29 @@ async def handle_da_hood_message(message, form, bot_user, bot):
 
 
 async def start_game(channel, form, bot_user, bot=None):
+    from users import (
+        credit_rakeback,
+        debit_rakeback_stake_for_form,
+        record_user_wager_on_game_start,
+    )
+    from message_queue import send_channel
+
+    # Debit rakeback before hold; refund if hold apply fails.
+    ok, err, rb_debited = await debit_rakeback_stake_for_form(form)
+    if not ok:
+        await send_channel(channel, err or "❌ Could not apply rakeback.")
+        await payout_winnings_if_any(channel, form)
+        return
+
     needs_hold = form.pop("pending_rerun_fund", False) or form.get("pending_hold_deduct") is not None
     if needs_hold or form.get("pending_wager_usd") is not None:
         if not await apply_hold_after_confirm(channel, form):
+            if rb_debited > 0 and form.get("ticket_user_id"):
+                await credit_rakeback(form["ticket_user_id"], rb_debited)
             await payout_winnings_if_any(channel, form)
             return
 
+    await record_user_wager_on_game_start(form)
     form["game_started"] = True
     form["ticket_channel_id"] = channel.id
     save_session_from_form(channel.id, form)

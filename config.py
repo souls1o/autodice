@@ -117,7 +117,7 @@ FORM_QUESTIONS = [
     },
     {
         "type": "open",
-        "text": '💸 **How much would you like to bet in USD + coin?**\n\n**Example:** "5 eth", "10 litecoin" (MIN: __$5__ | MAX: __${max_bet}__)\n\n-# @mention',
+        "text": '💸 **How much would you like to bet in USD + coin?**\n\n**Example:** "5 eth", "10 litecoin", or `"rakeback"` / `"rb"` to use your rakeback balance (MIN: __$1__ | MAX: __${max_bet}__)\n\n-# @mention',
         "short_key": "bet",
         "validator": "bet_validator"
     },

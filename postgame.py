@@ -224,6 +224,12 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
         print(f"[end_game] track_stats failed: {exc}")
 
     try:
+        from users import record_user_profit_on_game_end
+        await record_user_profit_on_game_end(form, self_won)
+    except Exception as exc:
+        print(f"[end_game] record_user_profit failed: {exc}")
+
+    try:
         await post_victory_message(channel.guild, form, bot)
     except Exception as exc:
         print(f"[end_game] post_victory_message failed: {exc}")
@@ -302,13 +308,17 @@ async def prompt_rerun_bet(channel, form, bot_user):
     await send_channel(
         channel,
         f"💸 {mention} **How much would you like to bet for the rerun?**\n\n"
-        f'**Example:** "5 {coin}", "10 litecoin" (MIN: __$1__ | MAX: __${max_bet}__)',
+        f'**Example:** "5 {coin}", "10 litecoin", or `"rakeback"` / `"rb"` '
+        f"(MIN: __$1__ | MAX: __${max_bet}__)",
     )
     save_session_from_form(channel.id, form)
     return True
 
 
 async def finalize_rerun(channel, form, bot_user):
+    from users import attach_user_to_form
+
+    await attach_user_to_form(form)
     if not await send_rerun_shortfall_before_confirm(channel, form):
         await payout_winnings_if_any(channel, form)
         return False
@@ -323,6 +333,8 @@ async def finalize_rerun(channel, form, bot_user):
 
 
 async def handle_rerun_bet_response(message, form, bot_user, bot=None):
+    from users import try_apply_rakeback_bet
+
     if not form.get("waiting_for_rerun_bet"):
         return
     if message.author.id != form["ticket_user_id"]:
@@ -333,7 +345,16 @@ async def handle_rerun_bet_response(message, form, bot_user, bot=None):
         await reply_message(message, "❌ Invalid format or out of range.")
         return
 
-    form["responses"]["bet"] = response
+    handled, err = await try_apply_rakeback_bet(response, form, message.author.id)
+    if handled:
+        if err:
+            await reply_message(message, err)
+            return
+    else:
+        form.pop("rakeback_bet", None)
+        form.pop("rakeback_stake", None)
+        form["responses"]["bet"] = response
+
     form["waiting_for_rerun_bet"] = False
     save_session_from_form(message.channel.id, form)
     await finalize_rerun(message.channel, form, bot_user)
@@ -358,6 +379,7 @@ async def start_new_form_from_yes(channel, form, bot_user, bot=None):
     ticket_user_id = form["ticket_user_id"]
     payout_address = form.get("payout_address")
     funds_recipient_id = form.get("funds_recipient_id")
+    mm_commands_sent = form.get("mm_commands_sent")
 
     active_forms.pop(channel.id, None)
     new_form = new_form_dict(channel.id, ticket_user_id)
@@ -365,7 +387,11 @@ async def start_new_form_from_yes(channel, form, bot_user, bot=None):
         new_form["payout_address"] = payout_address
     if funds_recipient_id:
         new_form["funds_recipient_id"] = funds_recipient_id
+    if mm_commands_sent:
+        new_form["mm_commands_sent"] = True
     active_forms[channel.id] = new_form
+    from users import attach_user_to_form
+    await attach_user_to_form(new_form)
     await ask_next_step(channel, bot_user)
 
 
