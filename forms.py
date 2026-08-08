@@ -1,3 +1,4 @@
+import asyncio
 import random
 
 import discord
@@ -559,7 +560,18 @@ async def handle_ticket_command(message, bot_user, bot=None):
 
     if content == "!profile":
         from users import build_profile_text
-        await send_channel(message.channel, await build_profile_text(message.author.id))
+        try:
+            text = await asyncio.wait_for(
+                build_profile_text(message.author.id),
+                timeout=8.0,
+            )
+            await send_channel(message.channel, text)
+        except Exception as exc:
+            print(f"[ticket] !profile failed for {message.author.id}: {exc}")
+            await send_channel(
+                message.channel,
+                "❌ Could not load profile (database timeout). Try again in a moment.",
+            )
         return True
 
     if content == "!rerun":

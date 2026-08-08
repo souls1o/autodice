@@ -197,8 +197,12 @@ async def on_guild_channel_delete(channel):
 
 @bot.event
 async def on_message(message: discord.Message):
+    # Selfbot: ignore own guild traffic (avoid loops), but allow own DM !commands.
     if message.author == bot.user:
-        return
+        if not isinstance(message.channel, discord.DMChannel):
+            return
+        if not (message.content or "").strip().startswith("!"):
+            return
 
     try:
         await _handle_message(message)
@@ -210,20 +214,25 @@ async def _handle_message(message: discord.Message):
     if isinstance(message.channel, discord.DMChannel):
         content = message.content.strip().lower()
 
-        # Any DM command creates a user profile if missing.
-        if content.startswith("!"):
-            from users import ensure_user
-            try:
-                await ensure_user(message.author.id)
-            except Exception as exc:
-                print(f"[dm] ensure_user failed for {message.author.id}: {exc}")
-
         if content == "!help":
             await reply_message(message, build_dm_help_text(message.author.id))
             return
         if content == "!profile":
+            # Creates a user profile if missing (only command that does).
             from users import build_profile_text
-            await reply_message(message, await build_profile_text(message.author.id))
+            try:
+                text = await asyncio.wait_for(
+                    build_profile_text(message.author.id),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !profile failed for {message.author.id}: {exc}")
+                await reply_message(
+                    message,
+                    "❌ Could not load profile (database timeout). Try again in a moment.",
+                )
+                return
+            await reply_message(message, text)
             return
         if content == "!gamemodes":
             await reply_message(message, build_dm_gamemodes_text())

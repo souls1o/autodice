@@ -1,10 +1,17 @@
 import requests
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
+import certifi
 import config
 from bets import UNITS, get_bet_info, get_price
 
-mongo_client = AsyncIOMotorClient(config.MONGO_URI)
+mongo_client = AsyncIOMotorClient(
+    config.MONGO_URI,
+    tlsCAFile=certifi.where(),
+    serverSelectionTimeoutMS=5_000,
+    connectTimeoutMS=5_000,
+    socketTimeoutMS=10_000,
+)
 db = mongo_client[config.DB_NAME]
 stats_collection = db.stats
 
