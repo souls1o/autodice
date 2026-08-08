@@ -6,7 +6,9 @@ from bets import (
     add_wagered_usd,
     add_winnings_usd,
     bet_validator,
+    display_his_bet_usd,
     format_bet_display,
+    format_matchup,
     get_bet_info,
     get_max_bet,
     get_price,
@@ -89,15 +91,15 @@ async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=Non
     game_num = await get_next_game_number(ticket_channel.guild, bot)
     mention = ticket_mention(ticket_channel, form)
     his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
-    his_bet = format_bet_display(his_bet_usd)
+    his_display = format_bet_display(display_his_bet_usd(form))
     my_bet = format_bet_display(my_bet_usd)
 
     if self_won:
         winner, loser = bot_user.mention, mention
-        winner_bet, loser_bet = my_bet, his_bet
+        winner_bet, loser_bet = my_bet, his_display
     else:
         winner, loser = mention, bot_user.mention
-        winner_bet, loser_bet = his_bet, my_bet
+        winner_bet, loser_bet = his_display, my_bet
 
     text = (
         f"Game #{game_num} <:dahoodcasino:1259258576015458426>\n"
@@ -146,7 +148,7 @@ async def send_rerun_shortfall_before_confirm(channel, form):
         await send_channel(
             channel,
             f"♻️ **Reusing `${format_bet_display(wager_usd)}` from hold "
-            f"(`{format_bet_display(my_bet_usd)}v{format_bet_display(his_bet_usd)}`)**",
+            f"(`{format_matchup(form)}`)**",
         )
         save_session_from_form(channel.id, form)
         return True

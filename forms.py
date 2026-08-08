@@ -7,8 +7,10 @@ import config
 from bets import (
     bet_validator,
     calculate_my_bet,
+    display_his_bet_usd,
     extract_crypto_address,
     format_bet_display,
+    format_matchup,
     get_bet_info,
     get_max_bet,
     get_price,
@@ -376,7 +378,7 @@ async def _fund_from_hold_or_saved_address(channel, form):
         await send_channel(
             channel,
             f"♻️ **Reusing `${format_bet_display(wager_usd)}` from hold "
-            f"(`{format_bet_display(my_bet_usd)}v{format_bet_display(his_bet_usd)}`)**",
+            f"(`{format_matchup(form)}`)**",
         )
         save_session_from_form(channel.id, form)
         return True
@@ -468,12 +470,11 @@ async def ask_next_step(channel, bot_user):
             form["step"] += 1
             await ask_next_step(channel, bot_user)
             return
-        bet_parts = responses.get("bet", "").split()
         _, _, fund_coin = get_bet_info(form)
         dynamic.update({
             "coin": fund_coin,
             "my_bet": format_bet_display(calculate_my_bet(form) or 0),
-            "his_bet": format_bet_display(bet_parts[0] if bet_parts else 0),
+            "his_bet": format_bet_display(display_his_bet_usd(form)),
         })
         question_text = format_text(q.get("text", ""), mention, responses, bot_user, dynamic)
         form["waiting_for_address"] = True

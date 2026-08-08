@@ -1,5 +1,5 @@
 import config
-from bets import format_bet_display, get_bet_info
+from bets import display_his_bet_usd, format_bet_display, get_bet_info, is_rakeback_bet
 from message_queue import send_user
 from services import get_house_balance_usd
 
@@ -41,19 +41,24 @@ async def notify_admin_ticket_added(bot, channel):
 
 async def notify_admin_game_started(bot, channel, form):
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
+    their_display = display_his_bet_usd(form)
     gamemode = GAMEMODE_LABELS.get(
         form.get("responses", {}).get("gamemode", "fair"),
         form.get("responses", {}).get("gamemode", "fair"),
     )
     coin_label = coin.upper()
+    # Real stake for house P/L; display their side as 0 when using rakeback.
     profit_on_win = my_bet_usd - his_bet_usd
+    their_line = f"**Their bet:** `${format_bet_display(their_display)}` {coin_label}"
+    if is_rakeback_bet(form):
+        their_line += f" _(rakeback stake `${format_bet_display(his_bet_usd)}`)_"
     await _send_admin_dm(
         bot,
         f"**🎮 Game Started**\n"
         f"**Channel:** {_channel_label(channel)}\n"
         f"**Gamemode:** {gamemode}\n"
         f"**Your bet:** `${format_bet_display(my_bet_usd)}` {coin_label}\n"
-        f"**Their bet:** `${format_bet_display(his_bet_usd)}` {coin_label}\n"
+        f"{their_line}\n"
         f"**Profit on win:** `${format_bet_display(profit_on_win)}`",
     )
 

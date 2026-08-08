@@ -128,6 +128,22 @@ def get_bet_info(form):
     return his_bet_usd, my_bet_usd, coin
 
 
+def display_his_bet_usd(form):
+    """Player side shown in XvY — 0 when staking rakeback (no crypto wager)."""
+    if is_rakeback_bet(form):
+        return 0.0
+    return get_bet_info(form)[0]
+
+
+def format_matchup(form):
+    """House bet vs displayed player bet, e.g. `9v0` for a rakeback stake."""
+    _his, my_bet_usd, _coin = get_bet_info(form)
+    return (
+        f"{format_bet_display(my_bet_usd)}v"
+        f"{format_bet_display(display_his_bet_usd(form))}"
+    )
+
+
 def get_price(coin):
     global _LAST_UPDATE
     coin = coin.lower()
