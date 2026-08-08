@@ -210,6 +210,14 @@ async def _handle_message(message: discord.Message):
     if isinstance(message.channel, discord.DMChannel):
         content = message.content.strip().lower()
 
+        # Any DM command creates a user profile if missing.
+        if content.startswith("!"):
+            from users import ensure_user
+            try:
+                await ensure_user(message.author.id)
+            except Exception as exc:
+                print(f"[dm] ensure_user failed for {message.author.id}: {exc}")
+
         if content == "!help":
             await reply_message(message, build_dm_help_text(message.author.id))
             return
