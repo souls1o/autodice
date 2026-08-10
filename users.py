@@ -415,13 +415,14 @@ async def build_profile_text(discord_id, *, create=True, for_admin_lookup=False)
     claimable = round(float(user.get("rakeback_balance", 0)), 2)
 
     nxt = next_level_wager_amount(level)
-    if nxt is None:
+    next_reward = LEVEL_REWARDS.get(level + 1)
+    if nxt is None or next_reward is None:
         wagered_note = " *(max level)*"
-        level_note = f" *({_fmt_money(wagered)}/max)*"
+        level_note = " *(max level)*"
     else:
         remaining = wagered_until_next_level(wagered, level)
-        wagered_note = f" *({_fmt_money(remaining)} more to level up)*"
-        level_note = f" *({_fmt_money(wagered)}/{_fmt_money(nxt)})*"
+        wagered_note = f" *({_fmt_money(remaining)}/{_fmt_money(nxt)} to level up)*"
+        level_note = f" *(+{_fmt_money(next_reward)} next level)*"
 
     title = "**👤 Profile**"
     if for_admin_lookup:
