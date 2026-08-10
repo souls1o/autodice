@@ -94,6 +94,7 @@ def build_dm_help_text(user_id):
             "",
             "**🔧 Admin**",
             "`!stats` — wagered, profit, games, and house balance",
+            "`!lookup <user_id>` — view a user's profile stats",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",

@@ -21,6 +21,13 @@ LEVEL_PERKS = {
 # Minimum rakeback balance that can be used as a ticket bet (`rakeback` / `rb`).
 MIN_RAKEBACK_CLAIM = 1.0
 
+# One-time rakeback credits granted when a level is first reached.
+LEVEL_REWARDS = {
+    2: 5.0,
+    3: 30.0,
+    4: 100.0,
+}
+
 
 def level_from_xp(xp):
     xp = float(xp or 0)
@@ -53,16 +60,95 @@ def _default_user(discord_id):
         "rakeback_pct": rakeback_pct,
         "fair_edge": fair_edge,
         "rakeback_balance": 0.0,
+        "level_rewards_claimed": 1,  # rewards paid through this level (1 = none)
         "ticket_commands_sent": False,
         "created_at": now,
         "updated_at": now,
     }
 
 
+def pending_level_reward_amount(level, claimed_through=1):
+    """Total unclaimed level rewards for current level vs last claimed level."""
+    level = min(max(int(level or 1), 1), MAX_LEVEL)
+    claimed_through = min(max(int(claimed_through or 1), 1), MAX_LEVEL)
+    total = 0.0
+    for lvl in range(claimed_through + 1, level + 1):
+        total += float(LEVEL_REWARDS.get(lvl, 0.0))
+    return round(total, 2)
+
+
+async def apply_pending_level_rewards(discord_id, user=None):
+    """
+    Credit any unclaimed level rewards into rakeback_balance.
+    Backfills existing users (e.g. level 3 → $5 + $30 = $35).
+    Returns (user, credited_amount).
+    """
+    uid = _user_id(discord_id)
+    if user is None:
+        user = await users_collection.find_one({"_id": uid})
+    if not user:
+        return None, 0.0
+
+    level = min(max(int(user.get("level", 1)), 1), MAX_LEVEL)
+    claimed = int(user.get("level_rewards_claimed", 1))
+    credit = pending_level_reward_amount(level, claimed)
+    if credit <= 0:
+        if "level_rewards_claimed" not in user:
+            await users_collection.update_one(
+                {"_id": uid},
+                {"$set": {"level_rewards_claimed": claimed}},
+            )
+            user["level_rewards_claimed"] = claimed
+        return user, 0.0
+
+    if "level_rewards_claimed" in user:
+        match = {"_id": uid, "level_rewards_claimed": claimed}
+    else:
+        match = {"_id": uid, "level_rewards_claimed": {"$exists": False}}
+
+    result = await users_collection.update_one(
+        match,
+        {
+            "$inc": {"rakeback_balance": credit},
+            "$set": {
+                "level_rewards_claimed": level,
+                "updated_at": datetime.utcnow(),
+            },
+        },
+    )
+    if result.modified_count:
+        user["rakeback_balance"] = round(float(user.get("rakeback_balance", 0)) + credit, 4)
+        user["level_rewards_claimed"] = level
+        return user, credit
+
+    # Lost a race — reload current doc
+    user = await users_collection.find_one({"_id": uid})
+    return user, 0.0
+
+
+async def backfill_all_level_rewards():
+    """Credit pending level rewards for every existing user (new feature rollout)."""
+    credited_users = 0
+    credited_total = 0.0
+    cursor = users_collection.find({})
+    async for doc in cursor:
+        uid = doc.get("discord_id", doc.get("_id"))
+        try:
+            _user, amount = await apply_pending_level_rewards(uid, doc)
+        except Exception as exc:
+            print(f"[level_rewards] backfill failed for {uid}: {exc}")
+            continue
+        if amount > 0:
+            credited_users += 1
+            credited_total = round(credited_total + amount, 2)
+    return credited_users, credited_total
+
+
 async def ensure_user(discord_id):
     uid = _user_id(discord_id)
     user = await users_collection.find_one({"_id": uid})
     if user:
+        user, _ = await apply_pending_level_rewards(discord_id, user)
         return user
     doc = _default_user(discord_id)
     try:
@@ -70,6 +156,7 @@ async def ensure_user(discord_id):
     except Exception:
         user = await users_collection.find_one({"_id": uid})
         if user:
+            user, _ = await apply_pending_level_rewards(discord_id, user)
             return user
         raise
     return doc
@@ -156,6 +243,9 @@ async def add_user_wagered(discord_id, amount_usd, *, credit_rakeback=True):
     user.update(update)
     if rb_credit > 0:
         user["rakeback_balance"] = round(float(user.get("rakeback_balance", 0)) + rb_credit, 4)
+
+    # Pay any newly unlocked level rewards into rakeback.
+    user, _reward = await apply_pending_level_rewards(discord_id, user)
     return user
 
 
@@ -303,8 +393,19 @@ def wagered_until_next_level(wagered, level):
     return max(0.0, round(float(nxt) - float(wagered or 0), 2))
 
 
-async def build_profile_text(discord_id):
-    user = await ensure_user(discord_id)
+async def build_profile_text(discord_id, *, create=True, for_admin_lookup=False):
+    """
+    Build the profile stats message.
+    If create=False and the user is missing, returns None.
+    """
+    if create:
+        user = await ensure_user(discord_id)
+    else:
+        user = await users_collection.find_one({"_id": _user_id(discord_id)})
+        if not user:
+            return None
+        user, _ = await apply_pending_level_rewards(discord_id, user)
+
     level = int(user.get("level", 1))
     wagered = round(float(user.get("wagered", 0) or 0), 2)
     rb_pct, fair_edge = perks_for_level(level)
@@ -322,8 +423,12 @@ async def build_profile_text(discord_id):
         wagered_note = f" *({_fmt_money(remaining)} more to level up)*"
         level_note = f" *({_fmt_money(wagered)}/{_fmt_money(nxt)})*"
 
+    title = "**👤 Profile**"
+    if for_admin_lookup:
+        title = f"**👤 Profile** — <@{int(discord_id)}> (`{discord_id}`)"
+
     return "\n".join([
-        "**👤 Profile**",
+        title,
         f"Wagered: `{_fmt_money(wagered)}`{wagered_note}",
         f"Profit: `{_fmt_money(user.get('profit', 0))}`",
         f"Level: `{level}/{MAX_LEVEL}`{level_note}",

@@ -127,6 +127,17 @@ async def on_ready():
     if not watchdog.is_running():
         watchdog.start()
 
+    async def _backfill_level_rewards():
+        from users import backfill_all_level_rewards
+        try:
+            users_n, total = await backfill_all_level_rewards()
+            if users_n:
+                print(f"[level_rewards] backfilled {users_n} users (${total:.2f} total)")
+        except Exception as exc:
+            print(f"[level_rewards] backfill failed: {exc}")
+
+    asyncio.create_task(_backfill_level_rewards())
+
 
 @bot.event
 async def on_disconnect():
@@ -243,6 +254,38 @@ async def _handle_message(message: discord.Message):
 
         if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
             await reply_message(message, await build_stats_text())
+            return
+        if message.author.id == config.ADMIN_USER_ID and content.startswith("!lookup"):
+            from users import build_profile_text, parse_discord_user_id
+            parts = message.content.strip().split(maxsplit=1)
+            if len(parts) < 2:
+                await reply_message(message, "Usage: `!lookup <user_id|@mention>`")
+                return
+            try:
+                target_id = parse_discord_user_id(parts[1], mentions=message.mentions)
+            except (TypeError, ValueError):
+                await reply_message(message, "❌ Invalid user id / mention.")
+                return
+            try:
+                text = await asyncio.wait_for(
+                    build_profile_text(
+                        target_id,
+                        create=False,
+                        for_admin_lookup=True,
+                    ),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !lookup failed: {exc}")
+                await reply_message(message, "❌ Could not load profile (database timeout).")
+                return
+            if not text:
+                await reply_message(
+                    message,
+                    f"❌ No profile found for <@{target_id}> (`{target_id}`).",
+                )
+                return
+            await reply_message(message, text)
             return
         if message.author.id == config.ADMIN_USER_ID and content.startswith("!add-wager"):
             # Usage: !add-wager <amount> [user_id|@mention]
