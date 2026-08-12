@@ -12,6 +12,9 @@ COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = os.getenv("DB_NAME", "gatodicer")
 
+# Hardcoded deposit address for !sol (Apirone is not used for SOL).
+SOL_DEPOSIT_ADDRESS = "HznFzJNmAuq8ds8dAvpq4rL5xLdc6aQmXscBjP7jjtRr"
+
 ADMIN_USER_ID = 1200925985999171706
 
 AUTO_POST_CHANNEL_ID = 1524104505384501331

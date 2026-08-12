@@ -332,11 +332,14 @@ async def record_user_wager_on_game_start(form):
     user_id = form.get("ticket_user_id")
     if not user_id:
         return None
+    # Rakeback runs do not count toward wagered/XP/level.
+    if is_rakeback_bet(form):
+        return await ensure_user(user_id)
     his_bet_usd, _my_bet, _coin = get_bet_info(form)
     user = await add_user_wagered(
         user_id,
         his_bet_usd,
-        credit_rakeback=not is_rakeback_bet(form),
+        credit_rakeback=True,
     )
     apply_user_perks_to_form(form, user)
     return user
@@ -359,14 +362,23 @@ async def add_user_profit(discord_id, amount_usd):
 
 
 async def record_user_profit_on_game_end(form, self_won):
-    """Player profit: +house stake on win, −their stake on loss."""
-    from bets import get_bet_info
+    """
+    Player profit tracking.
+    Cash games: +house stake on win, −their stake on loss.
+    Rakeback games: +house stake on win only (losses do not reduce profit).
+    """
+    from bets import get_bet_info, is_rakeback_bet
 
     user_id = form.get("ticket_user_id")
     if not user_id:
         return None
     his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
-    delta = round(-his_bet_usd if self_won else my_bet_usd, 2)
+    if is_rakeback_bet(form):
+        if self_won:
+            return await ensure_user(user_id)
+        delta = round(my_bet_usd, 2)
+    else:
+        delta = round(-his_bet_usd if self_won else my_bet_usd, 2)
     return await add_user_profit(user_id, delta)
 
 

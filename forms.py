@@ -546,8 +546,11 @@ async def handle_ticket_command(message, bot_user, bot=None):
 
     if content in COIN_ADDRESS_COMMANDS:
         coin = COIN_ADDRESS_COMMANDS[content]
-        address = await create_apirone_address(coin)
         label = coin.upper()
+        if coin == "sol":
+            address = getattr(config, "SOL_DEPOSIT_ADDRESS", None) or None
+        else:
+            address = await create_apirone_address(coin)
         if address:
             await send_channel(message.channel, f"`{address}`")
         else:
