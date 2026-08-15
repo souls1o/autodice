@@ -89,7 +89,7 @@ def build_dm_help_text(user_id):
             "`!stats` — wagered, profit, games, and house balance",
             "`!lookup <user_id>` — view a user's profile stats",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
-            "`!withdraw <coin> <address> <usd>` — send USD-equivalent via Apirone",
+            "`!withdraw <coin> <address> <usd>` — Apirone send (`btc`/`eth`/`ltc`/`usdt@eth`/…)",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
             "`!setchannel <id>` — set auto-post channel",

@@ -47,6 +47,25 @@ def _user_id(discord_id):
     return str(discord_id)
 
 
+async def find_user_doc(discord_id):
+    """Find a user by string _id, int _id, or discord_id — never insert."""
+    queries = [{"_id": _user_id(discord_id)}]
+    try:
+        n = int(discord_id)
+        queries.extend([
+            {"_id": n},
+            {"discord_id": n},
+            {"discord_id": str(n)},
+        ])
+    except (TypeError, ValueError):
+        pass
+    for query in queries:
+        user = await users_collection.find_one(query)
+        if user:
+            return user
+    return None
+
+
 def _default_user(discord_id):
     rakeback_pct, fair_edge = perks_for_level(1)
     now = datetime.utcnow()
@@ -83,15 +102,16 @@ async def apply_pending_level_rewards(discord_id, user=None):
     Backfills existing users (e.g. level 3 → $5 + $30 = $35).
     Returns (user, credited_amount).
     """
-    uid = _user_id(discord_id)
     if user is None:
-        user = await users_collection.find_one({"_id": uid})
+        user = await find_user_doc(discord_id)
     if not user:
         return None, 0.0
 
     level = min(max(int(user.get("level", 1)), 1), MAX_LEVEL)
     claimed = int(user.get("level_rewards_claimed", 1))
     credit = pending_level_reward_amount(level, claimed)
+    uid = user.get("_id")
+
     if credit <= 0:
         if "level_rewards_claimed" not in user:
             await users_collection.update_one(
@@ -121,7 +141,6 @@ async def apply_pending_level_rewards(discord_id, user=None):
         user["level_rewards_claimed"] = level
         return user, credit
 
-    # Lost a race — reload current doc
     user = await users_collection.find_one({"_id": uid})
     return user, 0.0
 
@@ -145,8 +164,7 @@ async def backfill_all_level_rewards():
 
 
 async def ensure_user(discord_id):
-    uid = _user_id(discord_id)
-    user = await users_collection.find_one({"_id": uid})
+    user = await find_user_doc(discord_id)
     if user:
         user, _ = await apply_pending_level_rewards(discord_id, user)
         return user
@@ -154,7 +172,7 @@ async def ensure_user(discord_id):
     try:
         await users_collection.insert_one(doc)
     except Exception:
-        user = await users_collection.find_one({"_id": uid})
+        user = await find_user_doc(discord_id)
         if user:
             user, _ = await apply_pending_level_rewards(discord_id, user)
             return user
@@ -239,7 +257,7 @@ async def add_user_wagered(discord_id, amount_usd, *, credit_rakeback=True):
     ops = {"$set": update}
     if inc:
         ops["$inc"] = inc
-    await users_collection.update_one({"_id": _user_id(discord_id)}, ops)
+    await users_collection.update_one({"_id": user["_id"]}, ops)
     user.update(update)
     if rb_credit > 0:
         user["rakeback_balance"] = round(float(user.get("rakeback_balance", 0)) + rb_credit, 4)
@@ -250,19 +268,34 @@ async def add_user_wagered(discord_id, amount_usd, *, credit_rakeback=True):
 
 
 async def debit_rakeback(discord_id, amount_usd):
-    """Atomically remove rakeback balance. Returns True if deducted."""
+    """
+    Remove rakeback balance. Returns (ok, available, requested).
+    Looks up the existing user without creating a $0 duplicate.
+    Compares rounded USD so float dust does not fail a real balance.
+    """
     amount = round(float(amount_usd or 0), 2)
     if amount <= 0:
-        return True
-    await ensure_user(discord_id)
+        user = await find_user_doc(discord_id)
+        avail = round(float((user or {}).get("rakeback_balance", 0) or 0), 2)
+        return True, avail, amount
+
+    user = await find_user_doc(discord_id)
+    if not user:
+        return False, 0.0, amount
+
+    available = round(float(user.get("rakeback_balance", 0) or 0), 2)
+    if available < amount:
+        return False, available, amount
+
     result = await users_collection.update_one(
-        {"_id": _user_id(discord_id), "rakeback_balance": {"$gte": amount}},
+        {"_id": user["_id"]},
         {
             "$inc": {"rakeback_balance": -amount},
             "$set": {"updated_at": datetime.utcnow()},
         },
     )
-    return result.modified_count > 0
+    ok = (result.modified_count or 0) > 0 or (result.matched_count or 0) > 0
+    return ok, available, amount
 
 
 async def credit_rakeback(discord_id, amount_usd):
@@ -270,9 +303,9 @@ async def credit_rakeback(discord_id, amount_usd):
     amount = round(float(amount_usd or 0), 2)
     if amount <= 0:
         return
-    await ensure_user(discord_id)
+    user = await find_user_doc(discord_id) or await ensure_user(discord_id)
     await users_collection.update_one(
-        {"_id": _user_id(discord_id)},
+        {"_id": user["_id"]},
         {
             "$inc": {"rakeback_balance": amount},
             "$set": {"updated_at": datetime.utcnow()},
@@ -322,8 +355,15 @@ async def debit_rakeback_stake_for_form(form):
     stake = player_rakeback_stake_usd(form)
     if stake <= 0:
         return False, "❌ Invalid rakeback stake — game cancelled.", 0.0
-    if not await debit_rakeback(user_id, stake):
-        return False, "❌ Insufficient rakeback balance — game cancelled.", 0.0
+    ok, available, requested = await debit_rakeback(user_id, stake)
+    if not ok:
+        from bets import format_bet_display
+        return (
+            False,
+            f"❌ Insufficient rakeback balance — need `${format_bet_display(requested)}`, "
+            f"have `${format_bet_display(available)}`.",
+            0.0,
+        )
     return True, None, stake
 
 
@@ -352,9 +392,9 @@ async def add_user_profit(discord_id, amount_usd):
     amount = round(float(amount_usd or 0), 2)
     if amount == 0:
         return await ensure_user(discord_id)
-    await ensure_user(discord_id)
+    user = await ensure_user(discord_id)
     await users_collection.update_one(
-        {"_id": _user_id(discord_id)},
+        {"_id": user["_id"]},
         {
             "$inc": {"profit": amount},
             "$set": {"updated_at": datetime.utcnow()},

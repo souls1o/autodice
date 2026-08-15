@@ -161,11 +161,14 @@ async def send_apirone(coin, address, amount):
 
 async def admin_withdraw_usd(coin, address, usd_amount):
     """Send USD-equivalent of coin to address via Apirone. Returns (ok, message)."""
-    from bets import get_price, normalize_coin, usd_to_smallest_unit
+    from bets import STABLECOINS, WITHDRAW_COINS, UNITS, get_price, normalize_coin, usd_to_smallest_unit
 
     coin = normalize_coin(coin)
-    if coin not in ("btc", "eth", "ltc"):
-        return False, "❌ Coin must be `btc`, `eth`, or `ltc`."
+    if coin not in WITHDRAW_COINS:
+        return False, (
+            "❌ Coin must be `btc`, `eth`, `ltc`, or a stable such as "
+            "`usdt@eth`, `usdt@bnb`, `usdc@eth`, `usdc@bnb`."
+        )
     try:
         usd = float(usd_amount)
     except (TypeError, ValueError):
@@ -177,10 +180,14 @@ async def admin_withdraw_usd(coin, address, usd_amount):
         return False, "❌ Missing destination address."
 
     try:
-        price = get_price(coin)
-        smallest = usd_to_smallest_unit(usd, coin, price)
+        if coin in STABLECOINS:
+            price = 1.0
+            smallest = int(round(usd * UNITS[coin]))
+        else:
+            price = get_price(coin)
+            smallest = usd_to_smallest_unit(usd, coin, price)
     except Exception as exc:
-        return False, f"❌ Could not price {coin.upper()}: {exc}"
+        return False, f"❌ Could not price {coin}: {exc}"
     if smallest <= 0:
         return False, "❌ Amount too small to send."
 
@@ -188,9 +195,10 @@ async def admin_withdraw_usd(coin, address, usd_amount):
     if "error" in result:
         err = result["error"]
         return False, f"❌ Transfer failed: {err if isinstance(err, str) else err}"
+    price_note = "1:1 USD" if coin in STABLECOINS else f"${price:,.2f}"
     return True, (
-        f"✅ Sent **${usd:,.2f}** {coin.upper()} to `{address}` "
-        f"({smallest} units @ ${price:,.2f})."
+        f"✅ Sent **${usd:,.2f}** `{coin}` to `{address}` "
+        f"({smallest} units @ {price_note})."
     )
 
 

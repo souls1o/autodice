@@ -331,7 +331,8 @@ async def _handle_message(message: discord.Message):
                 await reply_message(
                     message,
                     "Usage: `!withdraw <coin> <address> <usd>`\n"
-                    "Example: `!withdraw ltc LTxxxx… 25`",
+                    "Examples: `!withdraw ltc LTxxxx… 25`\n"
+                    "`!withdraw usdt@eth 0x… 50`  `!withdraw usdc@bnb 0x… 10`",
                 )
                 return
             coin, address, usd_raw = parts[1], parts[2], parts[3]

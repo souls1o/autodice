@@ -10,7 +10,45 @@ COIN_MAP = {
 }
 
 COINGECKO_IDS = {"btc": "bitcoin", "eth": "ethereum", "ltc": "litecoin"}
-UNITS = {"btc": 100_000_000, "eth": 10**18, "ltc": 100_000_000}
+UNITS = {
+    "btc": 100_000_000,
+    "eth": 10**18,
+    "ltc": 100_000_000,
+    # Apirone stablecoin smallest units (1 USD = 1 token).
+    "usdt@eth": 10**6,
+    "usdc@eth": 10**6,
+    "usdt@bnb": 10**18,
+    "usdc@bnb": 10**18,
+    "usdt@trx": 10**6,
+    "usdc@trx": 10**6,
+    "usdt@ton": 10**6,
+}
+
+STABLECOINS = {
+    "usdt@eth", "usdc@eth",
+    "usdt@bnb", "usdc@bnb",
+    "usdt@trx", "usdc@trx",
+    "usdt@ton",
+}
+
+WITHDRAW_COINS = {"btc", "eth", "ltc"} | STABLECOINS
+
+_STABLE_ALIASES = {
+    "usdteth": "usdt@eth",
+    "usdt-eth": "usdt@eth",
+    "usdcbnb": "usdc@bnb",
+    "usdc-bnb": "usdc@bnb",
+    "usdceth": "usdc@eth",
+    "usdc-eth": "usdc@eth",
+    "usdtbnb": "usdt@bnb",
+    "usdt-bnb": "usdt@bnb",
+    "usdttrx": "usdt@trx",
+    "usdt-trx": "usdt@trx",
+    "usdctrx": "usdc@trx",
+    "usdc-trx": "usdc@trx",
+    "usdtton": "usdt@ton",
+    "usdt-ton": "usdt@ton",
+}
 
 _BECH32_CHARS = r"qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _ADDRESS_PATTERNS = {
@@ -33,7 +71,12 @@ CACHE_SECONDS = 180
 
 
 def normalize_coin(coin_str):
-    return COIN_MAP.get(coin_str.lower(), coin_str.lower())
+    raw = (coin_str or "").strip().lower()
+    if raw in _STABLE_ALIASES:
+        return _STABLE_ALIASES[raw]
+    if "@" in raw:
+        return raw
+    return COIN_MAP.get(raw, raw)
 
 
 def extract_crypto_address(text, coin):
@@ -83,31 +126,23 @@ def is_rakeback_bet(form):
 
 def player_rakeback_stake_usd(form):
     """
-    Player's rakeback ledger stake (the $60), never the house side (the $180).
+    Player's rakeback ledger stake (e.g. $60), never house my_bet (e.g. $180).
+    Uses the amount locked in at bet time (`rakeback_stake` / `X rakeback`).
     """
-    parts = (form.get("responses", {}).get("bet") or "").strip().split()
-    from_bet = 0.0
-    if parts:
-        try:
-            from_bet = round(float(parts[0]), 2)
-        except (TypeError, ValueError):
-            from_bet = 0.0
-
     try:
         stored = round(float(form.get("rakeback_stake") or 0), 2)
     except (TypeError, ValueError):
         stored = 0.0
-
-    my_bet = calculate_my_bet(form) or 0.0
-    candidates = []
-    for amount in (stored, from_bet):
-        if amount > 0 and abs(amount - my_bet) > 0.001:
-            candidates.append(amount)
-    if candidates:
-        return min(candidates)
     if stored > 0:
         return stored
-    return from_bet if from_bet > 0 else 0.0
+
+    parts = (form.get("responses", {}).get("bet") or "").strip().split()
+    if len(parts) >= 2 and parts[-1].lower() == "rakeback":
+        try:
+            return round(float(parts[0]), 2)
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
 
 
 def calculate_my_bet(form):
