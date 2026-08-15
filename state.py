@@ -96,6 +96,12 @@ def save_session_from_form(channel_id, form):
         session["game_confirmer_user_id"] = form["game_confirmer_user_id"]
     if form.get("payout_address"):
         session["payout_address"] = form["payout_address"]
+    if form.get("rakeback_bet"):
+        session["rakeback_bet"] = True
+        session["rakeback_stake"] = form.get("rakeback_stake")
+    else:
+        session.pop("rakeback_bet", None)
+        session.pop("rakeback_stake", None)
     if form.get("responses"):
         session["responses"] = dict(form["responses"])
     if form.get("game_started"):
@@ -114,6 +120,9 @@ def form_from_session(channel_id):
         form["payout_address"] = session["payout_address"]
     if session.get("funds_recipient_id"):
         form["funds_recipient_id"] = session["funds_recipient_id"]
+    if session.get("rakeback_bet"):
+        form["rakeback_bet"] = True
+        form["rakeback_stake"] = session.get("rakeback_stake")
     form["total_wagered_usd"] = session.get("total_wagered_usd", 0.0)
     return form
 
@@ -138,6 +147,10 @@ def apply_session_to_form(channel_id, form):
     form["game_confirmer_user_id"] = session.get("game_confirmer_user_id")
     if session.get("payout_address") and not form.get("payout_address"):
         form["payout_address"] = session["payout_address"]
+    if session.get("rakeback_bet"):
+        form["rakeback_bet"] = True
+        if session.get("rakeback_stake") is not None:
+            form["rakeback_stake"] = session["rakeback_stake"]
     if session.get("responses") and not form.get("responses"):
         form["responses"] = dict(session["responses"])
     form["total_wagered_usd"] = session.get("total_wagered_usd", form.get("total_wagered_usd", 0.0))
@@ -184,6 +197,9 @@ def new_form_dict(channel_id, ticket_user_id):
         form["payout_address"] = session["payout_address"]
     if session.get("funds_recipient_id"):
         form["funds_recipient_id"] = session["funds_recipient_id"]
+    if session.get("rakeback_bet"):
+        form["rakeback_bet"] = True
+        form["rakeback_stake"] = session.get("rakeback_stake")
     return form
 
 

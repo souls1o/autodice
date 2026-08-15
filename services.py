@@ -159,6 +159,41 @@ async def send_apirone(coin, address, amount):
         return {"error": str(e)}
 
 
+async def admin_withdraw_usd(coin, address, usd_amount):
+    """Send USD-equivalent of coin to address via Apirone. Returns (ok, message)."""
+    from bets import get_price, normalize_coin, usd_to_smallest_unit
+
+    coin = normalize_coin(coin)
+    if coin not in ("btc", "eth", "ltc"):
+        return False, "❌ Coin must be `btc`, `eth`, or `ltc`."
+    try:
+        usd = float(usd_amount)
+    except (TypeError, ValueError):
+        return False, "❌ Amount must be a number (USD)."
+    if usd <= 0:
+        return False, "❌ Amount must be greater than 0."
+    address = (address or "").strip()
+    if not address:
+        return False, "❌ Missing destination address."
+
+    try:
+        price = get_price(coin)
+        smallest = usd_to_smallest_unit(usd, coin, price)
+    except Exception as exc:
+        return False, f"❌ Could not price {coin.upper()}: {exc}"
+    if smallest <= 0:
+        return False, "❌ Amount too small to send."
+
+    result = await send_apirone(coin, address, smallest)
+    if "error" in result:
+        err = result["error"]
+        return False, f"❌ Transfer failed: {err if isinstance(err, str) else err}"
+    return True, (
+        f"✅ Sent **${usd:,.2f}** {coin.upper()} to `{address}` "
+        f"({smallest} units @ ${price:,.2f})."
+    )
+
+
 async def create_apirone_address(coin):
     try:
         resp = requests.post(

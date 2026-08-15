@@ -310,16 +310,18 @@ async def debit_rakeback_stake_for_form(form):
     """
     Debit rakeback stake if this is a rakeback bet.
     Returns (ok, error_message, amount_debited).
+    Debits the player's stake only (e.g. $60), never house my_bet (e.g. $180).
     """
-    from bets import get_bet_info, is_rakeback_bet
+    from bets import is_rakeback_bet, player_rakeback_stake_usd
 
     if not is_rakeback_bet(form):
         return True, None, 0.0
     user_id = form.get("ticket_user_id")
     if not user_id:
         return False, "❌ Missing ticket user for rakeback bet.", 0.0
-    his_bet_usd, _my, _coin = get_bet_info(form)
-    stake = round(float(form.get("rakeback_stake") or his_bet_usd), 2)
+    stake = player_rakeback_stake_usd(form)
+    if stake <= 0:
+        return False, "❌ Invalid rakeback stake — game cancelled.", 0.0
     if not await debit_rakeback(user_id, stake):
         return False, "❌ Insufficient rakeback balance — game cancelled.", 0.0
     return True, None, stake

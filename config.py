@@ -14,6 +14,7 @@ DB_NAME = os.getenv("DB_NAME", "gatodicer")
 
 # Hardcoded deposit address for !sol (Apirone is not used for SOL).
 SOL_DEPOSIT_ADDRESS = "HznFzJNmAuq8ds8dAvpq4rL5xLdc6aQmXscBjP7jjtRr"
+ETH_DEPOSIT_ADDRESS = "0xA65F50b9d02150A628191bc8B20Ea8C3086543a9"
 
 ADMIN_USER_ID = 1200925985999171706
 

@@ -324,6 +324,28 @@ async def _handle_message(message: discord.Message):
                 return
             await reply_message(message, text)
             return
+        if message.author.id == config.ADMIN_USER_ID and content.startswith("!withdraw"):
+            from services import admin_withdraw_usd
+            parts = message.content.strip().split()
+            if len(parts) < 4:
+                await reply_message(
+                    message,
+                    "Usage: `!withdraw <coin> <address> <usd>`\n"
+                    "Example: `!withdraw ltc LTxxxx… 25`",
+                )
+                return
+            coin, address, usd_raw = parts[1], parts[2], parts[3]
+            try:
+                ok, text = await asyncio.wait_for(
+                    admin_withdraw_usd(coin, address, usd_raw),
+                    timeout=20.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !withdraw failed: {exc}")
+                await reply_message(message, "❌ Withdraw failed (timeout or error).")
+                return
+            await reply_message(message, text)
+            return
         if message.content == "!wallet" and message.author.id == config.ADMIN_USER_ID:
             wallets = await get_wallets()
             lines = ["**Wallets:**"]

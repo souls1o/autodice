@@ -81,6 +81,35 @@ def is_rakeback_bet(form):
     return len(parts) >= 2 and parts[-1].lower() == "rakeback"
 
 
+def player_rakeback_stake_usd(form):
+    """
+    Player's rakeback ledger stake (the $60), never the house side (the $180).
+    """
+    parts = (form.get("responses", {}).get("bet") or "").strip().split()
+    from_bet = 0.0
+    if parts:
+        try:
+            from_bet = round(float(parts[0]), 2)
+        except (TypeError, ValueError):
+            from_bet = 0.0
+
+    try:
+        stored = round(float(form.get("rakeback_stake") or 0), 2)
+    except (TypeError, ValueError):
+        stored = 0.0
+
+    my_bet = calculate_my_bet(form) or 0.0
+    candidates = []
+    for amount in (stored, from_bet):
+        if amount > 0 and abs(amount - my_bet) > 0.001:
+            candidates.append(amount)
+    if candidates:
+        return min(candidates)
+    if stored > 0:
+        return stored
+    return from_bet if from_bet > 0 else 0.0
+
+
 def calculate_my_bet(form):
     responses = form.get("responses", {})
     try:

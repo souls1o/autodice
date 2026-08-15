@@ -50,13 +50,8 @@ LISTEN_ROLES = [1258727325265297408, 1258732498482106398, 1505600256350355537]
 VALIDATORS = {"bet_validator": bet_validator}
 COIN_ADDRESS_COMMANDS = {
     "!ltc": "ltc",
-    "!btc": "btc",
     "!eth": "eth",
     "!sol": "sol",
-    "!usdt-bnb": "usdt@bnb",
-    "!usdt-eth": "usdt@eth",
-    "!usdc-bnb": "usdc@bnb",
-    "!usdc-eth": "usdc@eth",
 }
 
 DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
@@ -80,9 +75,7 @@ def build_dm_help_text(user_id):
         "`!housebal` — house balance in USD (BTC, ETH, LTC)",
         "",
         "**🎫 Ticket commands**",
-        "`!ltc` / `!btc` / `!eth` / `!sol` — get a deposit address",
-        "`!usdt-bnb` / `!usdt-eth` — USDT on BSC / ERC-20",
-        "`!usdc-bnb` / `!usdc-eth` — USDC on BSC / ERC-20",
+        "`!ltc` / `!eth` / `!sol` — get a deposit address",
         "`!hold` — show current winnings for this ticket",
         "`!profile` — wagered, profit, level, rakeback & fair edge",
         "`!rerun` — rerun with a new bet amount",
@@ -96,6 +89,7 @@ def build_dm_help_text(user_id):
             "`!stats` — wagered, profit, games, and house balance",
             "`!lookup <user_id>` — view a user's profile stats",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
+            "`!withdraw <coin> <address> <usd>` — send USD-equivalent via Apirone",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
             "`!setchannel <id>` — set auto-post channel",
@@ -549,6 +543,8 @@ async def handle_ticket_command(message, bot_user, bot=None):
         label = coin.upper()
         if coin == "sol":
             address = getattr(config, "SOL_DEPOSIT_ADDRESS", None) or None
+        elif coin == "eth":
+            address = getattr(config, "ETH_DEPOSIT_ADDRESS", None) or None
         else:
             address = await create_apirone_address(coin)
         if address:
