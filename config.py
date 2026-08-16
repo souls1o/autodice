@@ -89,29 +89,29 @@ FORM_QUESTIONS = [
         "text": """<:Dices:1259259866254676049> **Which gamemode would you like to play?**
 1. `I Win ALL 7's — FT3 → 2x | FT5 → 3x Bet`
 2. `I Win ALL 7's & Ties — FT3 → 3x | FT5 → 3.5x Bet`
-3. `Ties — FT3 → 20% | FT5 → 30% HIGHER Bet`
-4. `Fair — 10% LOWER Bet`
-5. `+1 on Rolls — FT3 → 1.5x | FT5 → 2x Bet`
-6. `1-0 Lead — FT3 → 1.5x | FT2 → 2x Bet`
+3. `+1 on Rolls — FT3 → 1.5x | FT5 → 2x Bet`
+4. `1-0 Lead — FT3 → 1.5x | FT2 → 2x Bet`
+5. `Ties — FT3 → 20% | FT5 → 30% HIGHER Bet`
+6. `Fair — {fair_pct}% LOWER Bet`
 
 -# @mention
 """,
         "mapping": {
             "7s": ["1"],
             "7s_ties": ["2"],
-            "ties": ["3"],
-            "fair": ["4"],
-            "plus1": ["5"],
-            "lead": ["6"],
+            "plus1": ["3"],
+            "lead": ["4"],
+            "ties": ["5"],
+            "fair": ["6"],
         },
         "only_for": ["dice"],
         "short_key": "gamemode"
     },
     {
         "type": "choice",
-        "text": """<:Coin:1259259605255720980> **Which coinflip gamemode would you like to play?**
+        "text": """<:Coin:1259259605255720980> **Which gamemode would you like to play?**
 1. `1-0 Lead — FT3 → 1.5x | FT2 → 2x Bet`
-2. `Fair — 7–10% LOWER Bet`
+2. `Fair — {fair_pct}% LOWER Bet`
 
 -# @mention
 """,

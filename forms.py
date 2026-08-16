@@ -505,7 +505,14 @@ async def ask_next_step(channel, bot_user):
     mention = ticket_mention(channel, form)
     responses = form.get("responses", {})
     game = responses.get("game")
-    dynamic = {"max_bet": get_max_bet(form), "game_emoji": "Dices" if game == "dice" else "Coin"}
+    fair_edge = float(form.get("fair_edge", 0.10))
+    fair_pct_num = round(fair_edge * 100, 1)
+    fair_pct = str(int(fair_pct_num)) if fair_pct_num == int(fair_pct_num) else f"{fair_pct_num:.1f}"
+    dynamic = {
+        "max_bet": get_max_bet(form),
+        "game_emoji": "Dices" if game == "dice" else "Coin",
+        "fair_pct": fair_pct,
+    }
     question_text = format_text(q.get("text", ""), mention, responses, bot_user, dynamic)
 
     if q["type"] in ("choice", "open"):
@@ -608,7 +615,9 @@ async def handle_ticket_command(message, bot_user, bot=None):
         else:
             address = await create_apirone_address(coin)
         if address:
-            await send_channel(message.channel, f"`{address}`")
+            from postgame import post_payout_address_and_clear_hold
+            form = get_form(message.channel.id)
+            await post_payout_address_and_clear_hold(message.channel, address, form)
         else:
             await send_channel(message.channel, f"❌ Failed to generate {label} address.")
         return True
@@ -703,13 +712,13 @@ async def handle_cancel_command(message, bot_user):
     form["waiting_for_address"] = False
     form["waiting_for_adder_confirm"] = False
 
-    from postgame import payout_winnings_if_any
+    from postgame import payout_winnings_if_any, post_payout_address_and_clear_hold
 
     if funds_sent:
         _, _, coin = get_bet_info(form)
         refund_address = await create_apirone_address(coin)
         if refund_address:
-            await send_channel(channel, f"`{refund_address}` (`{format_matchup(form)}`)")
+            await post_payout_address_and_clear_hold(channel, refund_address, form)
         else:
             await send_channel(channel, f"❌ Failed to generate {coin.upper()} refund address.")
 

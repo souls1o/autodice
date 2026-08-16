@@ -234,9 +234,33 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
         print(f"[end_game] post_victory_message failed: {exc}")
 
 
-async def payout_winnings_if_any(channel, form):
-    from bets import sync_winnings_crypto
+async def post_payout_address_and_clear_hold(channel, address, form=None):
+    """
+    Post a house payout address (no matchup suffix), announce hold wipe, and zero hold.
+    """
+    from state import get_ticket_session
 
+    session = get_ticket_session(channel.id)
+    if form is not None:
+        hold_usd = max(round(float(form.get("winnings_usd", 0) or 0), 2), 0.0)
+        form["winnings_usd"] = 0.0
+        form["winnings_crypto"] = 0.0
+        sync_winnings_crypto(form)
+        save_session_from_form(channel.id, form)
+    else:
+        hold_usd = max(round(float(session.get("winnings_usd", 0) or 0), 2), 0.0)
+
+    session["winnings_usd"] = 0.0
+    session["winnings_crypto"] = 0.0
+
+    await send_channel(
+        channel,
+        f"`{address}` (SEND ALL, HOLD SET TO 0) (Hold: ${format_bet_display(hold_usd)})",
+    )
+    return hold_usd
+
+
+async def payout_winnings_if_any(channel, form):
     sync_winnings_crypto(form)
     winnings_usd = form.get("winnings_usd", 0)
     winnings_crypto = form.get("winnings_crypto", 0)
@@ -244,10 +268,9 @@ async def payout_winnings_if_any(channel, form):
         coin = form.get("winnings_coin", "ltc")
         address = await create_apirone_address(coin)
         if address:
-            await send_channel(channel, f"`{address}` (`{format_matchup(form)}`)")
+            await post_payout_address_and_clear_hold(channel, address, form)
         else:
             await send_channel(channel, f"❌ Failed to generate {coin.upper()} address.")
-    # Keep hold in session — !hold must never clear
     finish_form(channel, form, payout=True)
 
 
