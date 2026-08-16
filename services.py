@@ -16,7 +16,7 @@ db = mongo_client[config.DB_NAME]
 stats_collection = db.stats
 
 HOUSE_COINS = ("btc", "eth", "ltc")
-_EMPTY_PERIOD = {"wagered": 0.0, "profit": 0.0, "games": 0}
+_EMPTY_PERIOD = {"wagered": 0.0, "profit": 0.0, "games": 0, "unique_users": []}
 
 
 def _stats_date_key(dt=None):
@@ -28,33 +28,58 @@ def _stats_today():
     return (datetime.utcnow() - timedelta(hours=8)).date()
 
 
+def _merge_unique_users(*groups):
+    seen = []
+    for group in groups:
+        for user_id in group or []:
+            uid = str(user_id)
+            if uid not in seen:
+                seen.append(uid)
+    return seen
+
+
 def _period_totals(stats, period):
     daily = stats.get("daily") or {}
     if period == "daily":
-        return dict(daily.get(_stats_date_key(), _EMPTY_PERIOD))
+        entry = dict(daily.get(_stats_date_key(), _EMPTY_PERIOD))
+        entry["unique_users"] = list(entry.get("unique_users") or [])
+        return entry
     if period == "weekly":
         totals = dict(_EMPTY_PERIOD)
+        totals["unique_users"] = []
         today = _stats_today()
         for i in range(7):
             entry = daily.get((today - timedelta(days=i)).strftime("%Y-%m-%d"), _EMPTY_PERIOD)
             totals["wagered"] += entry.get("wagered", 0)
             totals["profit"] += entry.get("profit", 0)
             totals["games"] += entry.get("games", 0)
+            totals["unique_users"] = _merge_unique_users(
+                totals["unique_users"], entry.get("unique_users")
+            )
         return totals
     if period == "monthly":
         totals = dict(_EMPTY_PERIOD)
+        totals["unique_users"] = []
         prefix = _stats_today().strftime("%Y-%m")
         for key, entry in daily.items():
             if key.startswith(prefix):
                 totals["wagered"] += entry.get("wagered", 0)
                 totals["profit"] += entry.get("profit", 0)
                 totals["games"] += entry.get("games", 0)
+                totals["unique_users"] = _merge_unique_users(
+                    totals["unique_users"], entry.get("unique_users")
+                )
         return totals
     all_time = stats.get("all_time") or {}
+    unique = all_time.get("unique_users")
+    if not unique:
+        # Legacy: fall back to top-level unique_users list.
+        unique = stats.get("unique_users") or []
     return {
         "wagered": all_time.get("wagered", 0),
         "profit": all_time.get("profit", 0),
         "games": all_time.get("games", 0),
+        "unique_users": list(unique),
     }
 
 
@@ -63,9 +88,11 @@ def _format_money(value):
 
 
 def _format_period(label, totals):
+    unique_count = len(totals.get("unique_users") or [])
     return (
         f"**{label}** — Wagered {_format_money(totals['wagered'])} | "
-        f"Profit {_format_money(totals['profit'])} | Games {int(totals['games'])}"
+        f"Profit {_format_money(totals['profit'])} | Games {int(totals['games'])} | "
+        f"Unique {unique_count}"
     )
 
 
@@ -96,9 +123,17 @@ async def update_stats(data):
     await stats_collection.update_one({"_id": "global"}, {"$set": data}, upsert=True)
 
 
+def _add_unique_user(period_entry, user_id):
+    users = period_entry.setdefault("unique_users", [])
+    uid = str(user_id)
+    if uid not in users:
+        users.append(uid)
+
+
 async def track_stats(form, self_won):
     his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
-    wagered = round(his_bet_usd + my_bet_usd, 2)
+    # House/self stake only — not combined with the player's side.
+    wagered = round(my_bet_usd, 2)
     profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
     game = form.get("responses", {}).get("game", "dice")
     user_id = str(form["ticket_user_id"])
@@ -106,23 +141,38 @@ async def track_stats(form, self_won):
     stats = await get_stats()
     today = _stats_date_key()
     if today not in stats["daily"]:
-        stats["daily"][today] = dict(_EMPTY_PERIOD)
+        stats["daily"][today] = {
+            "wagered": 0.0,
+            "profit": 0.0,
+            "games": 0,
+            "unique_users": [],
+        }
     day = stats["daily"][today]
+    day.setdefault("unique_users", [])
     day["wagered"] = round(day.get("wagered", 0) + wagered, 2)
     day["profit"] = round(day.get("profit", 0) + profit, 2)
     day["games"] = day.get("games", 0) + 1
+    _add_unique_user(day, user_id)
 
-    all_time = stats.setdefault("all_time", dict(_EMPTY_PERIOD))
+    all_time = stats.setdefault("all_time", {
+        "wagered": 0.0,
+        "profit": 0.0,
+        "games": 0,
+        "unique_users": [],
+    })
+    all_time.setdefault("unique_users", [])
     all_time["wagered"] = round(all_time.get("wagered", 0) + wagered, 2)
     all_time["profit"] = round(all_time.get("profit", 0) + profit, 2)
     all_time["games"] = all_time.get("games", 0) + 1
+    _add_unique_user(all_time, user_id)
 
-    most = stats.setdefault("most_played_game", {})
-    most[game] = most.get(game, 0) + 1
-
+    # Keep legacy top-level unique_users in sync for older readers.
     unique = stats.setdefault("unique_users", [])
     if user_id not in unique:
         unique.append(user_id)
+
+    most = stats.setdefault("most_played_game", {})
+    most[game] = most.get(game, 0) + 1
 
     await update_stats(stats)
 
@@ -138,7 +188,6 @@ async def build_stats_text():
         _format_period("All Time", _period_totals(stats, "all_time")),
         "",
         f"**Most played:** {_top_game(stats)}",
-        f"**Unique users:** {len(stats.get('unique_users', []))}",
         "",
         await get_house_balance_text(),
     ]

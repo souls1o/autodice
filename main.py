@@ -9,13 +9,14 @@ from forms import (
     handle_form_step,
     handle_global_listeners,
     handle_ticket_command,
+    is_cf_command,
     is_roll_command,
     message_references_bot,
     should_process_channel,
     start_ticket_form,
     was_bot_added_to_channel,
 )
-from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, start_game
+from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, note_mm_cf_command, start_game
 from message_queue import reply_message, send_channel, start_send_worker
 from services import get_house_balance_text, build_stats_text, get_wallets
 from state import (
@@ -248,6 +249,19 @@ async def _handle_message(message: discord.Message):
         if content == "!gamemodes":
             await reply_message(message, build_dm_gamemodes_text())
             return
+        if content in ("!lb", "!leaderboard"):
+            from users import build_leaderboard_text
+            try:
+                text = await asyncio.wait_for(build_leaderboard_text(), timeout=8.0)
+            except Exception as exc:
+                print(f"[dm] !leaderboard failed: {exc}")
+                await reply_message(
+                    message,
+                    "❌ Could not load leaderboard (database timeout). Try again in a moment.",
+                )
+                return
+            await reply_message(message, text)
+            return
         if content == "!housebal":
             await reply_message(message, await get_house_balance_text())
             return
@@ -410,6 +424,15 @@ async def _handle_message(message: discord.Message):
 
     if form and "game_state" in form:
         state = form["game_state"]
+        if state.get("game_type") == "coinflip":
+            if is_cf_command(message.content):
+                note_mm_cf_command(message, form)
+                return
+            if message.embeds and (
+                state.get("waiting_for_embed") or state.get("pending_cf_cmd_id")
+            ):
+                await handle_da_hood_message(message, form, bot.user, bot)
+                return
         if state.get("game_type") == "dice" and message.author.bot and (
             state.get("waiting_for_embed")
             or state.get("bot_roll_in_flight")
@@ -422,7 +445,7 @@ async def _handle_message(message: discord.Message):
         ):
             await handle_da_hood_message(message, form, bot.user, bot)
             return
-        if message.author.id == DA_HOOD_BOT_ID:
+        if state.get("game_type") == "dice" and message.author.id == DA_HOOD_BOT_ID:
             await handle_da_hood_message(message, form, bot.user, bot)
             return
 

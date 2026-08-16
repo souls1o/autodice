@@ -2,8 +2,10 @@ import asyncio
 import random
 import re
 
+import discord
+
 import config
-from forms import is_roll_command, member_has_listen_role
+from forms import is_cf_command, is_roll_command, member_has_listen_role
 from message_queue import send_channel
 from postgame import apply_hold_after_confirm, end_game, payout_winnings_if_any
 from state import save_session_from_form
@@ -55,6 +57,98 @@ async def get_command_before_message(channel, embed_message, predicate):
         if predicate(msg):
             return msg
     return None
+
+
+def _is_cf_mm(form, author):
+    mm_id = form.get("funds_recipient_id")
+    if mm_id:
+        return author.id == mm_id
+    return member_has_listen_role(author)
+
+
+def note_mm_cf_command(message, form):
+    """Record MM -cf so the following Heads/Tails embed can be matched to it."""
+    state = form.get("game_state") or {}
+    if state.get("game_type") != "coinflip":
+        return False
+    if not is_cf_command(message.content):
+        return False
+    if not _is_cf_mm(form, message.author):
+        return False
+    if message.id in state.get("consumed_cf_cmd_ids", set()):
+        return True
+    state["pending_cf_cmd_id"] = message.id
+    state["waiting_for_embed"] = True
+    return True
+
+
+def _cf_embed_text(message):
+    parts = []
+    for embed in message.embeds or []:
+        parts.extend([embed.title or "", embed.description or ""])
+        for field in embed.fields:
+            parts.extend([field.name or "", field.value or ""])
+        if embed.footer and embed.footer.text:
+            parts.append(embed.footer.text)
+        if embed.author and embed.author.name:
+            parts.append(embed.author.name)
+    return " ".join(parts).lower()
+
+
+def parse_cf_flip(message):
+    """Return 'heads' or 'tails' from a CF embed, or None."""
+    if not message.embeds:
+        return None
+    for embed in message.embeds:
+        for field in embed.fields:
+            name = (field.name or "").lower()
+            if any(k in name for k in ("result", "winner", "outcome", "side", "landed")):
+                value = (field.value or "").lower()
+                if re.search(r"\bheads\b", value) and not re.search(r"\btails\b", value):
+                    return "heads"
+                if re.search(r"\btails\b", value) and not re.search(r"\bheads\b", value):
+                    return "tails"
+                match = re.search(r"\b(heads|tails)\b", value)
+                if match:
+                    return match.group(1)
+    text = _cf_embed_text(message)
+    winner = re.search(
+        r"(?:winner|won|result|landed(?:\s+on)?|flipped|side)\s*[:\-]?\s*\*?\*?(heads|tails)",
+        text,
+    )
+    if winner:
+        return winner.group(1)
+    has_heads = bool(re.search(r"\bheads\b", text))
+    has_tails = bool(re.search(r"\btails\b", text))
+    if has_heads and not has_tails:
+        return "heads"
+    if has_tails and not has_heads:
+        return "tails"
+    bold = re.findall(r"\*\*(heads|tails)\*\*", text)
+    if len(bold) == 1:
+        return bold[0]
+    found = re.findall(r"\b(heads|tails)\b", text)
+    if found:
+        return found[-1]
+    return None
+
+
+async def _resolve_cf_command(message):
+    ref = message.reference
+    if ref:
+        cmd = ref.resolved if isinstance(getattr(ref, "resolved", None), discord.Message) else None
+        if cmd is None and getattr(ref, "message_id", None):
+            try:
+                cmd = await message.channel.fetch_message(ref.message_id)
+            except Exception:
+                cmd = None
+        if cmd is not None and is_cf_command(cmd.content):
+            return cmd
+    return await get_command_before_message(
+        message.channel,
+        message,
+        lambda m: is_cf_command(m.content) and not getattr(m.author, "bot", False),
+    )
 
 
 async def trigger_bot_roll(roll_channel, form, bot_user):
@@ -604,66 +698,54 @@ async def _handle_bot_roll_embed(message, form, bot_user, bot, cmd, total):
 
 
 async def handle_coinflip_embed(message, form, bot_user, bot):
+    """
+    One MM -cf per point. Nearest -cf before the embed must be from the MM
+    who received the crypto (funds_recipient_id). Embed must contain Heads or Tails.
+    """
     state = form["game_state"]
-    if not state.get("waiting_for_embed"):
+    if state.get("scoring"):
+        return
+    consumed = state.setdefault("consumed_embed_ids", set())
+    consumed_cmds = state.setdefault("consumed_cf_cmd_ids", set())
+    if message.id in consumed:
         return
 
-    cmd = await get_command_before_message(
-        message.channel, message, lambda m: "-cf" in (m.content or "").lower()
-    )
-    if not cmd or not member_has_listen_role(cmd.author):
-        return
-    if state.get("consumed_cf_message_id") == cmd.id:
-        return
-    state["consumed_cf_message_id"] = cmd.id
-
-    text = (message.content or "").lower()
-    if message.embeds:
-        embed = message.embeds[0]
-        text += " " + (embed.title or "").lower()
-        text += " " + (embed.description or "").lower()
-        for field in embed.fields:
-            text += " " + (field.name or "").lower()
-            text += " " + (field.value or "").lower()
-
-    if re.search(r"\bheads\b", text):
-        flip = "heads"
-    elif re.search(r"\btails\b", text):
-        flip = "tails"
-    else:
+    flip = parse_cf_flip(message)
+    if not flip:
         return
 
-    player = current_player_key(state)
-    state["round_flips"][player] = flip
-    state["waiting_for_embed"] = False
-    state.pop("consumed_cf_message_id", None)
-
-    other = other_player_key(player)
-    if state["round_flips"][other] is None:
-        state["current_player"] = other
-        state["waiting_for_embed"] = True
+    cmd = await _resolve_cf_command(message)
+    if not cmd:
+        return
+    if cmd.id in consumed_cmds:
+        return
+    if not _is_cf_mm(form, cmd.author):
         return
 
-    user_flip = state["round_flips"]["you"]
-    house_flip = state["round_flips"]["me"]
-    if user_flip == state["user_side"]:
-        state["adder_score"] += 1
-    if house_flip == state["house_side"]:
-        state["self_score"] += 1
+    consumed.add(message.id)
+    consumed_cmds.add(cmd.id)
+    state.pop("pending_cf_cmd_id", None)
+    state["scoring"] = True
 
-    ticket_channel = await get_ticket_channel(bot, form, fallback=roll_channel)
-    await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
+    try:
+        user_side = (state.get("user_side") or "heads").lower()
+        if flip == user_side:
+            state["adder_score"] += 1
+        else:
+            state["self_score"] += 1
 
-    first_to = state["first_to"]
-    if state["self_score"] >= first_to or state["adder_score"] >= first_to:
-        self_won = state["self_score"] >= first_to
-        winner_id = bot_user.id if self_won else form["ticket_user_id"]
-        await end_game(ticket_channel, form, self_won, bot_user, bot)
-        return
+        ticket_channel = await get_ticket_channel(bot, form, fallback=message.channel)
+        await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
 
-    state["round_flips"] = {"me": None, "you": None}
-    state["current_player"] = state["first_player"]
-    state["waiting_for_embed"] = True
+        first_to = int(state.get("first_to") or 2)
+        if state["self_score"] >= first_to or state["adder_score"] >= first_to:
+            self_won = state["self_score"] >= first_to
+            await end_game(ticket_channel, form, self_won, bot_user, bot)
+            return
+    finally:
+        if form.get("game_state") is state:
+            state["scoring"] = False
+            state["waiting_for_embed"] = True
 
 
 async def handle_da_hood_message(message, form, bot_user, bot):
@@ -705,7 +787,6 @@ async def start_game(channel, form, bot_user, bot=None):
         await notify_admin_game_started(bot, channel, form)
     responses = form["responses"]
     game = responses.get("game", "dice")
-    first_to = int(responses.get("first_to", "ft3").replace("ft", ""))
 
     if game == "coinflip":
         side = (responses.get("side", "heads") or "heads").lower()
@@ -716,20 +797,33 @@ async def start_game(channel, form, bot_user, bot=None):
         else:
             user_side, house_side = side, "tails" if side == "heads" else "heads"
 
+        gamemode = responses.get("gamemode", "lead")
+        if gamemode == "lead_10":
+            gamemode = "lead"
+            first_to_raw = responses.get("first_to") or "ft2"
+        else:
+            first_to_raw = responses.get("first_to", "ft3")
+        first_to = int(str(first_to_raw).replace("ft", "") or "3")
+        is_lead = gamemode == "lead"
+        self_score, adder_score = (1, 0) if is_lead else (0, 0)
+
         form["game_state"] = {
             "game_type": "coinflip",
+            "gamemode": gamemode,
             "first_to": first_to,
             "user_side": user_side,
             "house_side": house_side,
-            "self_score": 0,
-            "adder_score": 0,
-            "first_player": "you",
-            "current_player": "you",
-            "round_flips": {"me": None, "you": None},
+            "self_score": self_score,
+            "adder_score": adder_score,
             "waiting_for_embed": True,
+            "scoring": False,
+            "consumed_embed_ids": set(),
+            "consumed_cf_cmd_ids": set(),
         }
+        await send_channel(channel, f"`{self_score}-{adder_score}`")
         return
 
+    first_to = int(responses.get("first_to", "ft3").replace("ft", ""))
     first_raw = responses.get("first", "@gengardicer 1").replace(" 1", "").strip()
     ticket_user_id = form.get("ticket_user_id")
     if first_raw in ("@mention", "you") or (
@@ -740,13 +834,18 @@ async def start_game(channel, form, bot_user, bot=None):
         first_player = "me"
     else:
         first_player = first_raw
+    gamemode = responses.get("gamemode", "fair")
+    if gamemode == "lead_10":
+        gamemode = "lead"
+    is_lead = gamemode == "lead"
+    self_score, adder_score = (1, 0) if is_lead else (0, 0)
     form["game_state"] = {
         "game_type": "dice",
         "first_to": first_to,
         "mode": responses.get("mode", "normal"),
-        "gamemode": responses.get("gamemode", "fair"),
-        "self_score": 0,
-        "adder_score": 0,
+        "gamemode": gamemode,
+        "self_score": self_score,
+        "adder_score": adder_score,
         "first_player": first_player,
         "current_player": first_player,
         "waiting_for_embed": False,
@@ -766,5 +865,7 @@ async def start_game(channel, form, bot_user, bot=None):
         "pending_bot_roll_cmd_id": None,
         "scoring": False,
     }
+    if is_lead:
+        await send_channel(channel, f"`{self_score}-{adder_score}`")
     roll_channel = await get_ticket_channel(bot, form) if bot else channel
     await do_next_roll(roll_channel, form, bot_user, bot)

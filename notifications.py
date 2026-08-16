@@ -9,6 +9,8 @@ GAMEMODE_LABELS = {
     "ties": "I Win Ties",
     "fair": "Fair",
     "plus1": "I Get +1 on Rolls",
+    "lead": "1-0 Lead",
+    "lead_10": "1-0 Lead FT2",
 }
 
 
@@ -42,10 +44,12 @@ async def notify_admin_ticket_added(bot, channel):
 async def notify_admin_game_started(bot, channel, form):
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
     their_display = display_his_bet_usd(form)
-    gamemode = GAMEMODE_LABELS.get(
-        form.get("responses", {}).get("gamemode", "fair"),
-        form.get("responses", {}).get("gamemode", "fair"),
-    )
+    responses = form.get("responses", {})
+    gm_key = responses.get("gamemode", "fair")
+    gamemode = GAMEMODE_LABELS.get(gm_key, gm_key)
+    first_to = responses.get("first_to")
+    if first_to and gm_key in ("lead", "lead_10", "fair"):
+        gamemode = f"{gamemode} {str(first_to).upper()}"
     coin_label = coin.upper()
     # Real stake for house P/L; display their side as 0 when using rakeback.
     profit_on_win = my_bet_usd - his_bet_usd

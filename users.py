@@ -493,6 +493,30 @@ async def build_profile_text(discord_id, *, create=True, for_admin_lookup=False)
     ])
 
 
+async def build_leaderboard_text():
+    """Top 5 highest profit and top 5 most negative profit players."""
+    projection = {"discord_id": 1, "profit": 1}
+    top = await users_collection.find({}, projection).sort("profit", -1).limit(5).to_list(5)
+    bottom = await users_collection.find({}, projection).sort("profit", 1).limit(5).to_list(5)
+
+    def _line(rank, user):
+        uid = user.get("discord_id") or user.get("_id")
+        profit = round(float(user.get("profit", 0) or 0), 2)
+        return f"`{rank}.` <@{uid}> — `{_fmt_money(profit)}`"
+
+    lines = ["**🏆 Leaderboard**", "", "**Top Profit**"]
+    if top:
+        lines.extend(_line(i, u) for i, u in enumerate(top, 1))
+    else:
+        lines.append("_No players yet._")
+    lines.extend(["", "**Most Negative**"])
+    if bottom:
+        lines.extend(_line(i, u) for i, u in enumerate(bottom, 1))
+    else:
+        lines.append("_No players yet._")
+    return "\n".join(lines)
+
+
 def parse_discord_user_id(raw, *, mentions=None):
     """Parse a snowflake, <@id>, or first mention into an int user id."""
     text = (raw or "").strip()

@@ -59,7 +59,12 @@ DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
 2. **I Win ALL 7's & Ties** — FT3 → 3x | FT5 → 3.5x Bet
 3. **I Win Ties** — FT3 → 20% HIGHER | FT5 → 30% HIGHER Bet
 4. **Fair** — 7–10% LOWER Bet (improves with level)
-5. **I Get +1 on Rolls** — FT3 → 1.5x | FT5 → 2x Bet (normal +1 / crazy −1)"""
+5. **I Get +1 on Rolls** — FT3 → 1.5x | FT5 → 2x Bet (normal +1 / crazy −1)
+6. **1-0 Lead** — FT3 → 1.5x | FT2 → 2x Bet
+
+**🪙 Coinflip**
+1. **1-0 Lead** — FT3 → 1.5x | FT2 → 2x Bet
+2. **Fair** — 7–10% LOWER Bet (improves with level)"""
 
 
 def build_dm_gamemodes_text():
@@ -71,7 +76,8 @@ def build_dm_help_text(user_id):
         "**📖 Commands**",
         "`!help` — show this list",
         "`!profile` — wagered, profit, level, rakeback & fair edge",
-        "`!gamemodes` — dice gamemode info",
+        "`!gamemodes` — dice & coinflip gamemode info",
+        "`!lb` / `!leaderboard` — top & bottom profit players",
         "`!housebal` — house balance in USD (BTC, ETH, LTC)",
         "",
         "**🎫 Ticket commands**",
@@ -128,6 +134,10 @@ def message_starts_with(message, prefix):
 
 def is_roll_command(content):
     return (content or "").strip().lower().startswith("-roll")
+
+
+def is_cf_command(content):
+    return (content or "").strip().lower().startswith("-cf")
 
 
 def member_has_listen_role(member):
@@ -321,12 +331,39 @@ def format_text(text, mention, responses, bot_user, dynamic=None):
     return result
 
 
+def _normalize_gamemode(key):
+    if key == "lead_10":
+        return "lead"
+    return key or "fair"
+
+
+def question_applies(q, responses):
+    """Whether a form question should be asked for the current responses."""
+    game = responses.get("game")
+    gamemode = _normalize_gamemode(responses.get("gamemode"))
+    if "only_for" in q and game and game not in q["only_for"]:
+        return False
+    only_gm = q.get("only_for_gamemode")
+    if only_gm:
+        raw = responses.get("gamemode")
+        allowed = set(only_gm)
+        if gamemode not in allowed and raw not in allowed:
+            return False
+    skip_gm = q.get("skip_for_gamemode")
+    if skip_gm:
+        raw = responses.get("gamemode")
+        skipped = set(skip_gm)
+        if gamemode in skipped or raw in skipped:
+            return False
+    return True
+
+
 def build_confirm_text(channel, form, bot_user):
     mention = ticket_mention(channel, form)
     responses = form.get("responses", {})
     game = responses.get("game", "dice")
     first_to = responses.get("first_to", "ft3")
-    gamemode_key = responses.get("gamemode", "7s")
+    gamemode_key = _normalize_gamemode(responses.get("gamemode", "7s"))
     first = responses.get("first", "@gengardicer 1").replace("@mention", mention).replace("@gengardicer", bot_user.mention)
     mode = responses.get("mode", "normal")
     side = responses.get("side", "h")
@@ -336,6 +373,8 @@ def build_confirm_text(channel, form, bot_user):
             gamemode_text = f", {bot_user.mention} gets -1 on rolls"
         else:
             gamemode_text = f", {bot_user.mention} gets +1 on rolls"
+    elif gamemode_key == "lead":
+        gamemode_text = ", 1-0 lead"
     else:
         gamemode_text = {
             "7s": f", {bot_user.mention} wins ALL 7s",
@@ -348,7 +387,12 @@ def build_confirm_text(channel, form, bot_user):
         # Normal mode: omit mode word entirely (e.g. "ft3 @bot 1, ...")
         mode_part = f"{mode} " if mode and mode != "normal" else ""
         return f"{first_to} {mode_part}{first}{gamemode_text}"
-    return f"cf {first_to} {first} {side}"
+    side_label = "heads" if str(side).lower() in ("h", "heads") else "tails"
+    if gamemode_key == "lead":
+        return f"cf {first_to} 1-0 lead, {mention} {side_label}"
+    if gamemode_key == "fair":
+        return f"cf {first_to} fair, {mention} {side_label}"
+    return f"cf {first_to} {mention} {side_label}"
 
 
 async def _fund_from_hold_or_saved_address(channel, form):
@@ -406,7 +450,8 @@ async def _fund_from_hold_or_saved_address(channel, form):
     form["waiting_for_address"] = False
     await send_channel(
         channel,
-        f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",
+        f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` "
+        f"(`{format_matchup(form)}`)",
     )
     save_session_from_form(channel.id, form)
     return True
@@ -445,8 +490,7 @@ async def ask_next_step(channel, bot_user):
 
     while form["step"] < len(config.FORM_QUESTIONS):
         q = config.FORM_QUESTIONS[form["step"]]
-        game = form["responses"].get("game")
-        if "only_for" not in q or not game or game in q["only_for"]:
+        if question_applies(q, form.get("responses", {})):
             break
         form["step"] += 1
 
@@ -647,7 +691,7 @@ async def handle_cancel_command(message, bot_user):
         _, _, coin = get_bet_info(form)
         refund_address = await create_apirone_address(coin)
         if refund_address:
-            await send_channel(channel, f"`{refund_address}`")
+            await send_channel(channel, f"`{refund_address}` (`{format_matchup(form)}`)")
         else:
             await send_channel(channel, f"❌ Failed to generate {coin.upper()} refund address.")
 
@@ -724,7 +768,8 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                 from_hold = wager_usd
                 await send_channel(
                     message.channel,
-                    f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}`",
+                    f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` "
+                    f"(`{format_matchup(form)}`)",
                 )
 
             form["waiting_for_address"] = False

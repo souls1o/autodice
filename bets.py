@@ -91,21 +91,19 @@ def extract_crypto_address(text, coin):
 def get_max_bet(form):
     responses = form.get("responses", {})
     game = responses.get("game")
+    gamemode = responses.get("gamemode")
+    if gamemode == "lead_10":
+        gamemode = "lead"
+    first_to = responses.get("first_to")
     if game == "coinflip":
         return 200
-    gamemode = responses.get("gamemode")
-    first_to = responses.get("first_to")
     if gamemode == "7s_ties" and first_to == "ft5":
         return 65
     if (gamemode == "7s" and first_to == "ft5") or (gamemode == "7s_ties" and first_to == "ft3"):
         return 75
     if gamemode == "7s" and first_to == "ft3":
         return 200
-    if gamemode == "fair":
-        return 200
-    if gamemode == "ties":
-        return 200
-    if gamemode == "plus1":
+    if gamemode in ("fair", "ties", "plus1", "lead"):
         return 200
     return 50
 
@@ -145,6 +143,18 @@ def player_rakeback_stake_usd(form):
     return 0.0
 
 
+def _fair_house_bet(his_bet, form):
+    edge = float(form.get("fair_edge", 0.10))
+    edge = min(max(edge, 0.07), 0.10)
+    return round(his_bet * (1.0 - edge), 2)
+
+
+def _lead_house_bet(his_bet, first_to):
+    if first_to == "ft2":
+        return round(his_bet * 2, 2)
+    return round(his_bet * 1.5, 2)
+
+
 def calculate_my_bet(form):
     responses = form.get("responses", {})
     try:
@@ -154,12 +164,22 @@ def calculate_my_bet(form):
 
     game = responses.get("game")
     first_to = responses.get("first_to")
+    gamemode = responses.get("gamemode")
+    if gamemode == "lead_10":
+        gamemode = "lead"
+        first_to = first_to or "ft2"
+
+    if gamemode == "lead":
+        return _lead_house_bet(his_bet, first_to or "ft3")
+
     if game == "coinflip":
-        return round(his_bet * 0.85, 2)
+        if gamemode == "fair":
+            return _fair_house_bet(his_bet, form)
+        return _lead_house_bet(his_bet, first_to or "ft2")
+
     if game != "dice":
         return None
 
-    gamemode = responses.get("gamemode")
     if gamemode == "7s" and first_to == "ft3":
         return round(his_bet * 2, 2)
     if (gamemode == "7s" and first_to == "ft5") or (gamemode == "7s_ties" and first_to == "ft3"):
@@ -175,9 +195,7 @@ def calculate_my_bet(form):
     if gamemode == "plus1" and first_to == "ft5":
         return round(his_bet * 2, 2)
     if gamemode == "fair":
-        edge = float(form.get("fair_edge", 0.10))
-        edge = min(max(edge, 0.07), 0.10)
-        return round(his_bet * (1.0 - edge), 2)
+        return _fair_house_bet(his_bet, form)
     return None
 
 

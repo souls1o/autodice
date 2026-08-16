@@ -172,7 +172,8 @@ async def send_rerun_shortfall_before_confirm(channel, form):
     form["pending_hold_deduct"] = wager_usd
     await send_channel(
         channel,
-        f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun",
+        f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun "
+        f"(`{format_matchup(form)}`)",
     )
     save_session_from_form(channel.id, form)
     return True
@@ -243,7 +244,7 @@ async def payout_winnings_if_any(channel, form):
         coin = form.get("winnings_coin", "ltc")
         address = await create_apirone_address(coin)
         if address:
-            await send_channel(channel, f"`{address}`")
+            await send_channel(channel, f"`{address}` (`{format_matchup(form)}`)")
         else:
             await send_channel(channel, f"❌ Failed to generate {coin.upper()} address.")
     # Keep hold in session — !hold must never clear
