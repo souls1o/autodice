@@ -238,5 +238,10 @@ def clear_ticket_session(channel_id):
 def finish_form(channel, form, *, payout=False):
     """End the active form. Hold/winnings are never cleared here — only channel delete is."""
     cancel_rerun_timeout(form)
+    session = get_ticket_session(channel.id)
+    # After a played game (or payout), require a bot ping / !rerun to start again.
+    if form.get("game_started") or session.get("game_started"):
+        session["game_started"] = True
+        session["require_bot_ping"] = True
     save_session_from_form(channel.id, form)
     active_forms.pop(channel.id, None)

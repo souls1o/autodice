@@ -364,7 +364,7 @@ async def process_rerun(channel, form, bot_user, bot=None):
 async def start_new_form_from_yes(channel, form, bot_user, bot=None):
     """'yes' after a game → brand-new form (new settings), keeping hold/session funds."""
     from forms import ask_next_step
-    from state import active_forms, new_form_dict
+    from state import active_forms, get_ticket_session, new_form_dict
 
     cancel_rerun_timeout(form)
     form["waiting_for_rerun"] = False
@@ -378,6 +378,7 @@ async def start_new_form_from_yes(channel, form, bot_user, bot=None):
     funds_recipient_id = form.get("funds_recipient_id")
 
     active_forms.pop(channel.id, None)
+    get_ticket_session(channel.id).pop("require_bot_ping", None)
     new_form = new_form_dict(channel.id, ticket_user_id)
     if payout_address:
         new_form["payout_address"] = payout_address

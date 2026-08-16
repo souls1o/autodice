@@ -457,10 +457,16 @@ async def _handle_message(message: discord.Message):
         # After a game / "no" to rerun, don't restart the form on random chat —
         # only a bot ping (or !rerun, handled above) may start again.
         session = get_ticket_session(channel_id)
-        post_game = bool(session.get("game_started")) or float(session.get("winnings_usd", 0) or 0) > 0
-        if post_game and not message_references_bot(message, bot.user):
+        needs_ping = (
+            session.get("require_bot_ping")
+            or session.get("game_started")
+            or float(session.get("winnings_usd", 0) or 0) > 0
+        )
+        if needs_ping and not message_references_bot(message, bot.user):
             return
         await asyncio.sleep(1)
+        if channel_id in active_forms:
+            return
         await start_ticket_form(message.channel, bot.user, bot)
         return
 

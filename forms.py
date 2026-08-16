@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 
 import discord
 
@@ -53,6 +54,12 @@ COIN_ADDRESS_COMMANDS = {
     "!eth": "eth",
     "!sol": "sol",
 }
+TICKET_COMMANDS = frozenset({
+    "!ltc", "!eth", "!sol",
+    "!restart", "!hold", "!profile", "!rerun", "!cancel",
+})
+TICKET_CMD_COOLDOWN_SECONDS = 3.0
+_ticket_cmd_cooldown = {}  # (channel_id, user_id) -> monotonic timestamp
 
 DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
 1. **I Win ALL 7's** — FT3 → 2x | FT5 → 3x Bet
@@ -389,10 +396,8 @@ def build_confirm_text(channel, form, bot_user):
         return f"{first_to} {mode_part}{first}{gamemode_text}"
     side_label = "heads" if str(side).lower() in ("h", "heads") else "tails"
     if gamemode_key == "lead":
-        return f"cf {first_to} 1-0 lead, {mention} {side_label}"
-    if gamemode_key == "fair":
-        return f"cf {first_to} fair, {mention} {side_label}"
-    return f"cf {first_to} {mention} {side_label}"
+        return f"{first_to} 1-0 lead, {mention} {side_label}"
+    return f"{first_to} {mention} {side_label}"
 
 
 async def _fund_from_hold_or_saved_address(channel, form):
@@ -477,6 +482,8 @@ async def start_ticket_form(channel, bot_user, bot=None):
         return
 
     register_ticket_channel(channel.id)
+    session = get_ticket_session(channel.id)
+    session.pop("require_bot_ping", None)
     form = new_form_dict(channel.id, ticket_user_id)
     active_forms[channel.id] = form
     await attach_user_to_form(form)
@@ -581,6 +588,15 @@ async def handle_form_step(message, form, bot_user):
 
 async def handle_ticket_command(message, bot_user, bot=None):
     content = message.content.strip().lower()
+    if content not in TICKET_COMMANDS:
+        return False
+
+    key = (message.channel.id, message.author.id)
+    now = time.monotonic()
+    last = _ticket_cmd_cooldown.get(key, 0.0)
+    if now - last < TICKET_CMD_COOLDOWN_SECONDS:
+        return True  # swallow spam without running the command
+    _ticket_cmd_cooldown[key] = now
 
     if content in COIN_ADDRESS_COMMANDS:
         coin = COIN_ADDRESS_COMMANDS[content]
@@ -655,6 +671,8 @@ async def handle_rerun_command(message, bot_user, bot=None):
         return
 
     active_forms[channel.id] = form
+    session = get_ticket_session(channel.id)
+    session.pop("require_bot_ping", None)
     await process_rerun(channel, form, bot_user, bot)
 
 
