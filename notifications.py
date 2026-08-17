@@ -63,7 +63,6 @@ async def notify_admin_game_started(bot, channel, form):
         f"**Gamemode:** {gamemode}\n"
         f"**Your bet:** `${format_bet_display(my_bet_usd)}` {coin_label}\n"
         f"{their_line}\n"
-        f"**Profit on win:** `${format_bet_display(profit_on_win)}`",
     )
 
 
