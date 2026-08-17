@@ -94,9 +94,15 @@ async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=Non
         winner, loser = mention, bot_user.mention
         winner_bet, loser_bet = his_display, my_bet
 
+    game = form.get("responses", {}).get("game", "dice")
+    game_emoji = (
+        "<:Coin:1259259605255720980>"
+        if game == "coinflip"
+        else "<:Dices:1259259866254676049>"
+    )
     text = (
         f"Game #{game_num} <:dahoodcasino:1259258576015458426>\n"
-        f"<:Dices:1259259866254676049>\n"
+        f"{game_emoji}\n"
         f"{winner} overtakes {loser}\n"
         f"{winner_bet}v{loser_bet}"
     )

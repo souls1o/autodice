@@ -17,15 +17,40 @@ stats_collection = db.stats
 
 HOUSE_COINS = ("btc", "eth", "ltc")
 _EMPTY_PERIOD = {"wagered": 0.0, "profit": 0.0, "games": 0, "unique_users": []}
+# Fixed Pacific Standard Time (UTC-8), matching existing daily keys.
+_PST_OFFSET = timedelta(hours=8)
+
+
+def _stats_now_pst():
+    return datetime.utcnow() - _PST_OFFSET
 
 
 def _stats_date_key(dt=None):
-    dt = dt or datetime.utcnow()
-    return (dt - timedelta(hours=8)).strftime("%Y-%m-%d")
+    """PST calendar date key used for daily buckets (YYYY-MM-DD)."""
+    if dt is None:
+        return _stats_now_pst().strftime("%Y-%m-%d")
+    if hasattr(dt, "hour"):
+        # Treat naive datetimes as UTC, same as track_stats.
+        return (dt - _PST_OFFSET).strftime("%Y-%m-%d")
+    return dt.strftime("%Y-%m-%d")
 
 
 def _stats_today():
-    return (datetime.utcnow() - timedelta(hours=8)).date()
+    return _stats_now_pst().date()
+
+
+def _week_start_sunday(today=None):
+    """Sunday of the current PST week (week starts Sunday 12:00 AM PST)."""
+    today = today or _stats_today()
+    # weekday(): Mon=0 ... Sun=6 → days since Sunday
+    days_since_sunday = (today.weekday() + 1) % 7
+    return today - timedelta(days=days_since_sunday)
+
+
+def _month_start(today=None):
+    """1st of the current PST month."""
+    today = today or _stats_today()
+    return today.replace(day=1)
 
 
 def _merge_unique_users(*groups):
@@ -38,38 +63,36 @@ def _merge_unique_users(*groups):
     return seen
 
 
+def _sum_daily_range(daily, start_date, end_date):
+    totals = dict(_EMPTY_PERIOD)
+    totals["unique_users"] = []
+    day = start_date
+    while day <= end_date:
+        entry = daily.get(day.strftime("%Y-%m-%d"), _EMPTY_PERIOD)
+        totals["wagered"] += entry.get("wagered", 0)
+        totals["profit"] += entry.get("profit", 0)
+        totals["games"] += entry.get("games", 0)
+        totals["unique_users"] = _merge_unique_users(
+            totals["unique_users"], entry.get("unique_users")
+        )
+        day += timedelta(days=1)
+    return totals
+
+
 def _period_totals(stats, period):
     daily = stats.get("daily") or {}
+    today = _stats_today()
     if period == "daily":
-        entry = dict(daily.get(_stats_date_key(), _EMPTY_PERIOD))
+        # Calendar day starting 12:00 AM PST.
+        entry = dict(daily.get(today.strftime("%Y-%m-%d"), _EMPTY_PERIOD))
         entry["unique_users"] = list(entry.get("unique_users") or [])
         return entry
     if period == "weekly":
-        totals = dict(_EMPTY_PERIOD)
-        totals["unique_users"] = []
-        today = _stats_today()
-        for i in range(7):
-            entry = daily.get((today - timedelta(days=i)).strftime("%Y-%m-%d"), _EMPTY_PERIOD)
-            totals["wagered"] += entry.get("wagered", 0)
-            totals["profit"] += entry.get("profit", 0)
-            totals["games"] += entry.get("games", 0)
-            totals["unique_users"] = _merge_unique_users(
-                totals["unique_users"], entry.get("unique_users")
-            )
-        return totals
+        # Calendar week starting Sunday 12:00 AM PST.
+        return _sum_daily_range(daily, _week_start_sunday(today), today)
     if period == "monthly":
-        totals = dict(_EMPTY_PERIOD)
-        totals["unique_users"] = []
-        prefix = _stats_today().strftime("%Y-%m")
-        for key, entry in daily.items():
-            if key.startswith(prefix):
-                totals["wagered"] += entry.get("wagered", 0)
-                totals["profit"] += entry.get("profit", 0)
-                totals["games"] += entry.get("games", 0)
-                totals["unique_users"] = _merge_unique_users(
-                    totals["unique_users"], entry.get("unique_users")
-                )
-        return totals
+        # Calendar month starting the 1st at 12:00 AM PST.
+        return _sum_daily_range(daily, _month_start(today), today)
     all_time = stats.get("all_time") or {}
     unique = all_time.get("unique_users")
     if not unique:
