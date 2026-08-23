@@ -92,6 +92,14 @@ def save_session_from_form(channel_id, form):
     session["player_hold_usd"] = form.get("player_hold_usd", 0.0)
     session["winnings_coin"] = form.get("winnings_coin", session.get("winnings_coin", "ltc"))
     session["total_wagered_usd"] = form.get("total_wagered_usd", 0.0)
+    if form.get("games_played") is not None:
+        session["games_played"] = form.get("games_played")
+    if form.get("player_wagered_usd") is not None:
+        session["player_wagered_usd"] = form.get("player_wagered_usd")
+    if form.get("bot_wagered_usd") is not None:
+        session["bot_wagered_usd"] = form.get("bot_wagered_usd")
+    if form.get("ticket_profit_usd") is not None:
+        session["ticket_profit_usd"] = form.get("ticket_profit_usd")
     if form.get("funds_recipient_id"):
         session["funds_recipient_id"] = form["funds_recipient_id"]
     if form.get("game_confirmer_user_id"):

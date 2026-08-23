@@ -107,6 +107,7 @@ def build_dm_help_text(user_id):
             "",
             "**🔧 Admin**",
             "`!stats` — wagered, profit, games, and house balance",
+            "`!ticket <channel_id>` — games / wagered / profit for a ticket",
             "`!lookup <user_id>` — view a user's profile stats",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
             "`!withdraw <coin> <address> <usd>` — Apirone send (`btc`/`eth`/`ltc`/`usdt@eth`/…)",

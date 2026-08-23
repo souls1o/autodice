@@ -14,6 +14,7 @@ mongo_client = AsyncIOMotorClient(
 )
 db = mongo_client[config.DB_NAME]
 stats_collection = db.stats
+tickets_collection = db.tickets
 
 HOUSE_COINS = ("btc", "eth", "ltc")
 _EMPTY_PERIOD = {"wagered": 0.0, "profit": 0.0, "games": 0, "unique_users": []}
@@ -128,6 +129,44 @@ def _top_gamemode(stats):
     return GAMEMODE_LABELS.get(key, key.replace("_", " ").title())
 
 
+def _format_day_label(date_key):
+    """Format YYYY-MM-DD for display."""
+    try:
+        return datetime.strptime(date_key, "%Y-%m-%d").strftime("%b %d, %Y")
+    except (TypeError, ValueError):
+        return str(date_key)
+
+
+def _best_and_worst_days(stats):
+    """
+    Return (best_key, best_profit, worst_key, worst_profit) from daily buckets.
+    Ignores days with no games / missing profit.
+    """
+    daily = stats.get("daily") or {}
+    best_key = worst_key = None
+    best_profit = None
+    worst_profit = None
+    for key, entry in daily.items():
+        if not isinstance(entry, dict):
+            continue
+        if int(entry.get("games", 0) or 0) <= 0:
+            continue
+        profit = round(float(entry.get("profit", 0) or 0), 2)
+        if best_profit is None or profit > best_profit:
+            best_profit = profit
+            best_key = key
+        if worst_profit is None or profit < worst_profit:
+            worst_profit = profit
+            worst_key = key
+    return best_key, best_profit, worst_key, worst_profit
+
+
+def _format_extreme_day(label, date_key, profit):
+    if date_key is None or profit is None:
+        return f"**{label}:** _None yet_"
+    return f"**{label}:** {_format_day_label(date_key)} — {_format_money(profit)}"
+
+
 def period_date_keys(period):
     """PST calendar date keys (YYYY-MM-DD) for daily/weekly/monthly buckets."""
     today = _stats_today()
@@ -240,10 +279,109 @@ async def track_stats(form, self_won):
     most[gm_key] = most.get(gm_key, 0) + 1
 
     await update_stats(stats)
+    await track_ticket_game(form, self_won)
+
+
+async def track_ticket_game(form, self_won):
+    """Accumulate per-ticket game totals for admin !ticket lookup."""
+    from bets import is_rakeback_bet
+    from datetime import datetime
+
+    channel_id = form.get("ticket_channel_id")
+    if not channel_id:
+        return
+
+    his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
+    player_wagered = 0.0 if is_rakeback_bet(form) else round(his_bet_usd, 2)
+    bot_wagered = round(my_bet_usd, 2)
+    profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
+    user_id = form.get("ticket_user_id")
+
+    # In-memory session mirror (active tickets).
+    try:
+        from state import get_ticket_session
+        session = get_ticket_session(channel_id)
+        session["games_played"] = int(session.get("games_played", 0) or 0) + 1
+        session["player_wagered_usd"] = round(
+            float(session.get("player_wagered_usd", 0) or 0) + player_wagered, 2
+        )
+        session["bot_wagered_usd"] = round(
+            float(session.get("bot_wagered_usd", 0) or 0) + bot_wagered, 2
+        )
+        session["ticket_profit_usd"] = round(
+            float(session.get("ticket_profit_usd", 0) or 0) + profit, 2
+        )
+        if user_id:
+            session["ticket_user_id"] = user_id
+    except Exception as exc:
+        print(f"[track_ticket_game] session update failed: {exc}")
+
+    await tickets_collection.update_one(
+        {"_id": str(channel_id)},
+        {
+            "$set": {
+                "channel_id": int(channel_id),
+                "ticket_user_id": int(user_id) if user_id else None,
+                "updated_at": datetime.utcnow(),
+            },
+            "$setOnInsert": {"created_at": datetime.utcnow()},
+            "$inc": {
+                "games_played": 1,
+                "player_wagered_usd": player_wagered,
+                "bot_wagered_usd": bot_wagered,
+                "profit_usd": profit,
+            },
+        },
+        upsert=True,
+    )
+
+
+async def get_ticket_stats(ticket_id):
+    """Return ticket aggregate dict or None."""
+    doc = await tickets_collection.find_one({"_id": str(ticket_id)})
+    if doc and int(doc.get("games_played", 0) or 0) > 0:
+        return doc
+
+    from state import ticket_sessions
+    try:
+        session = ticket_sessions.get(int(ticket_id))
+    except (TypeError, ValueError):
+        session = None
+    if not session:
+        return None
+    games = int(session.get("games_played", 0) or 0)
+    if games <= 0:
+        return None
+    return {
+        "_id": str(ticket_id),
+        "channel_id": int(ticket_id),
+        "ticket_user_id": session.get("ticket_user_id"),
+        "games_played": games,
+        "player_wagered_usd": float(session.get("player_wagered_usd", 0) or 0),
+        "bot_wagered_usd": float(session.get("bot_wagered_usd", 0) or 0),
+        "profit_usd": float(session.get("ticket_profit_usd", 0) or 0),
+    }
+
+
+async def build_ticket_stats_text(ticket_id):
+    doc = await get_ticket_stats(ticket_id)
+    if not doc:
+        return None
+    user_id = doc.get("ticket_user_id")
+    user_line = f"<@{user_id}> (`{user_id}`)" if user_id else "_unknown_"
+    return "\n".join([
+        f"**🎫 Ticket** `{ticket_id}`",
+        f"**Player:** {user_line}",
+        f"**Games played:** {int(doc.get('games_played', 0) or 0)}",
+        f"**Player wagered:** {_format_money(doc.get('player_wagered_usd', 0))}",
+        f"**Bot wagered:** {_format_money(doc.get('bot_wagered_usd', 0))}",
+        f"**Profit:** {_format_money(doc.get('profit_usd', 0))}",
+    ])
 
 
 async def build_stats_text():
     stats = await get_stats()
+    best_key, best_profit, worst_key, worst_profit = _best_and_worst_days(stats)
     lines = [
         "**📊 Stats**",
         "",
@@ -252,6 +390,8 @@ async def build_stats_text():
         _format_period("Monthly", _period_totals(stats, "monthly")),
         _format_period("All Time", _period_totals(stats, "all_time")),
         "",
+        _format_extreme_day("Good day", best_key, best_profit),
+        _format_extreme_day("Worst day", worst_key, worst_profit),
         f"**Most played:** {_top_gamemode(stats)}",
     ]
     return "\n".join(lines)

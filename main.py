@@ -18,7 +18,7 @@ from forms import (
 )
 from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, note_mm_cf_command, start_game
 from message_queue import reply_message, send_channel, start_send_worker
-from services import get_house_balance_text, build_stats_text, get_wallets
+from services import get_house_balance_text, build_stats_text, build_ticket_stats_text, get_wallets
 from state import (
     active_forms,
     clear_ticket_session,
@@ -275,6 +275,36 @@ async def _handle_message(message: discord.Message):
 
         if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
             await reply_message(message, await build_stats_text())
+            return
+        if message.author.id == config.ADMIN_USER_ID and content.startswith("!ticket"):
+            parts = message.content.strip().split(maxsplit=1)
+            if len(parts) < 2:
+                await reply_message(message, "Usage: `!ticket <channel_id>`")
+                return
+            raw = parts[1].strip()
+            if raw.startswith("<#") and raw.endswith(">"):
+                raw = raw[2:-1]
+            try:
+                ticket_id = int(raw)
+            except ValueError:
+                await reply_message(message, "❌ Invalid ticket / channel id.")
+                return
+            try:
+                text = await asyncio.wait_for(
+                    build_ticket_stats_text(ticket_id),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !ticket failed: {exc}")
+                await reply_message(message, "❌ Could not load ticket stats (database timeout).")
+                return
+            if not text:
+                await reply_message(
+                    message,
+                    f"❌ No games recorded for ticket `{ticket_id}`.",
+                )
+                return
+            await reply_message(message, text)
             return
         if message.author.id == config.ADMIN_USER_ID and content.startswith("!lookup"):
             from users import build_profile_text, parse_discord_user_id
