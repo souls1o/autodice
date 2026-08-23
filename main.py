@@ -18,7 +18,7 @@ from forms import (
 )
 from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, note_mm_cf_command, start_game
 from message_queue import reply_message, send_channel, start_send_worker
-from services import get_house_balance_text, build_stats_text, build_ticket_stats_text, get_wallets
+from services import get_house_balance_text, build_stats_text, build_ticket_stats_text, build_history_text, get_wallets
 from state import (
     active_forms,
     clear_ticket_session,
@@ -142,7 +142,18 @@ async def on_ready():
         except Exception as exc:
             print(f"[level_rewards] backfill failed: {exc}")
 
+    async def _ensure_history_index():
+        from services import history_collection
+        try:
+            await history_collection.create_index(
+                [("user_id", 1), ("created_at", -1)],
+                name="user_history_created",
+            )
+        except Exception as exc:
+            print(f"[history] index ensure failed: {exc}")
+
     asyncio.create_task(_backfill_level_rewards())
+    asyncio.create_task(_ensure_history_index())
 
 
 @bot.event
@@ -291,6 +302,29 @@ async def _handle_message(message: discord.Message):
                 await reply_message(
                     message,
                     "❌ Could not load leaderboard (database timeout). Try again in a moment.",
+                )
+                return
+            await reply_message(message, text)
+            return
+        if content == "!history" or content.startswith("!history "):
+            parts = message.content.strip().split()
+            page = 1
+            if len(parts) >= 2:
+                try:
+                    page = int(parts[1])
+                except ValueError:
+                    await reply_message(message, "Usage: `!history [page]`")
+                    return
+            try:
+                text = await asyncio.wait_for(
+                    build_history_text(message.author.id, page),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !history failed: {exc}")
+                await reply_message(
+                    message,
+                    "❌ Could not load history (database timeout). Try again in a moment.",
                 )
                 return
             await reply_message(message, text)

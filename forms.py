@@ -91,6 +91,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
         "`!ticket <channel_id>` — games / wagered / profit for a ticket",
         "`!gamemodes` — dice & coinflip gamemode info",
         "`!lb` / `!leaderboard` [t/w/m] — top & bottom profit, top wagered",
+        "`!history` [page] — your recent game history",
         "`!housebal` / `!hb` — house balance in USD",
         "",
         "**🎫 Ticket commands**",

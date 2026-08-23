@@ -15,6 +15,9 @@ mongo_client = AsyncIOMotorClient(
 db = mongo_client[config.DB_NAME]
 stats_collection = db.stats
 tickets_collection = db.tickets
+history_collection = db.game_history
+
+HISTORY_PAGE_SIZE = 5
 
 HOUSE_COINS = ("btc", "eth", "ltc")
 _EMPTY_PERIOD = {"wagered": 0.0, "profit": 0.0, "games": 0, "unique_users": []}
@@ -280,6 +283,130 @@ async def track_stats(form, self_won):
 
     await update_stats(stats)
     await track_ticket_game(form, self_won)
+
+
+_HISTORY_GAMEMODE_LABELS = {
+    "7s": "I Win ALL 7s",
+    "7s_ties": "I Win ALL 7's & Ties",
+    "ties": "I Win Ties",
+    "fair": "Fair",
+    "plus1": "I Get +1 on Rolls",
+    "lead": "1-0 Lead",
+    "lead_10": "1-0 Lead FT2",
+    "cf_fair": "CF Fair",
+    "cf_lead": "CF 1-0 Lead",
+}
+
+
+def _history_gamemode_label(form):
+    responses = form.get("responses", {}) or {}
+    gm_key = _gamemode_stats_key(form)
+    label = _HISTORY_GAMEMODE_LABELS.get(gm_key, gm_key)
+    first_to = responses.get("first_to")
+    if first_to:
+        label = f"{label} {str(first_to).upper()}"
+    return label
+
+
+async def record_game_history(form, self_won):
+    """Persist one finished game for player !history lookup."""
+    from bets import is_rakeback_bet
+
+    user_id = form.get("ticket_user_id")
+    if not user_id:
+        return
+
+    his_bet_usd, my_bet_usd, coin = get_bet_info(form)
+    rakeback = is_rakeback_bet(form)
+    if rakeback:
+        player_profit = 0.0 if self_won else round(my_bet_usd, 2)
+        wagered = 0.0
+    else:
+        player_profit = round(-his_bet_usd if self_won else my_bet_usd, 2)
+        wagered = round(his_bet_usd, 2)
+
+    responses = form.get("responses", {}) or {}
+    doc = {
+        "user_id": int(user_id),
+        "channel_id": int(form["ticket_channel_id"]) if form.get("ticket_channel_id") else None,
+        "game": responses.get("game", "dice"),
+        "gamemode": _gamemode_stats_key(form),
+        "gamemode_label": _history_gamemode_label(form),
+        "first_to": responses.get("first_to"),
+        "player_bet_usd": round(his_bet_usd, 2),
+        "house_bet_usd": round(my_bet_usd, 2),
+        "wagered_usd": wagered,
+        "player_profit_usd": player_profit,
+        "player_won": not self_won,
+        "rakeback": rakeback,
+        "coin": coin or "ltc",
+        "created_at": datetime.utcnow(),
+    }
+    await history_collection.insert_one(doc)
+
+
+async def build_history_text(discord_id, page=1):
+    """Paginated game history for a player. Returns message text."""
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(1, page)
+
+    user_id = int(discord_id)
+    total = await history_collection.count_documents({"user_id": user_id})
+    if total == 0:
+        return "**📜 Game History**\n_No games recorded yet._"
+
+    total_pages = max(1, (total + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE)
+    if page > total_pages:
+        page = total_pages
+
+    skip = (page - 1) * HISTORY_PAGE_SIZE
+    cursor = (
+        history_collection.find({"user_id": user_id})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(HISTORY_PAGE_SIZE)
+    )
+    games = await cursor.to_list(HISTORY_PAGE_SIZE)
+
+    lines = [
+        f"**📜 Game History** — Page `{page}/{total_pages}` ({total} game{'s' if total != 1 else ''})",
+        "",
+    ]
+    start_n = skip + 1
+    for i, game in enumerate(games):
+        won = bool(game.get("player_won"))
+        emoji = "✅" if won else "❌"
+        result = "Win" if won else "Loss"
+        label = game.get("gamemode_label") or game.get("gamemode") or "—"
+        profit = float(game.get("player_profit_usd", 0) or 0)
+        wagered = float(game.get("wagered_usd", 0) or 0)
+        if wagered <= 0 and game.get("rakeback"):
+            stake = float(game.get("house_bet_usd", 0) or 0)
+            stake_note = f"RB `${stake:,.2f}`"
+        else:
+            stake_note = f"`${wagered:,.2f}`"
+        created = game.get("created_at")
+        if created:
+            date_str = (created - _PST_OFFSET).strftime("%m/%d %H:%M")
+        else:
+            date_str = "—"
+        profit_str = f"+${profit:,.2f}" if profit > 0 else f"-${abs(profit):,.2f}" if profit < 0 else "$0.00"
+        lines.append(
+            f"`{start_n + i}.` {emoji} **{result}** · {label} · {stake_note} → `{profit_str}` · {date_str}"
+        )
+
+    lines.append("")
+    if total_pages > 1:
+        if page < total_pages:
+            lines.append(f"Next: `!history {page + 1}`")
+        if page > 1:
+            lines.append(f"Prev: `!history {page - 1}`")
+    else:
+        lines.append("_End of history._")
+    return "\n".join(lines)
 
 
 async def track_ticket_game(form, self_won):

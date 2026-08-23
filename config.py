@@ -103,8 +103,6 @@ FORM_QUESTIONS = [
 4. `1-0 Lead — FT3 → 1.5x | FT2 → 2x Bet`
 5. `Ties — FT3 → 20% | FT5 → 30% HIGHER Bet`
 6. `Fair — {fair_pct}% LOWER Bet`
-
--# @mention
 """,
         "mapping": {
             "7s": ["1"],
@@ -122,8 +120,6 @@ FORM_QUESTIONS = [
         "text": """<:Coin:1259259605255720980> **Which gamemode would you like to play?**
 1. `1-0 Lead — FT3 → 1.5x | FT2 → 2x Bet`
 2. `Fair — {fair_pct}% LOWER Bet`
-
--# @mention
 """,
         "mapping": {
             "lead": ["1", "lead", "l"],
@@ -138,8 +134,6 @@ FORM_QUESTIONS = [
 1. `FT3
 2. `FT2
 3. `Random`
-
--# @mention
 """,
         "mapping": {
             "ft3": ["1"],
@@ -155,8 +149,6 @@ FORM_QUESTIONS = [
 1. `FT3`
 2. `FT5`
 3. `Random`
-
--# @mention
 """,
         "mapping": {
             "ft3": ["1"],
@@ -169,7 +161,7 @@ FORM_QUESTIONS = [
     },
     {
         "type": "open",
-        "text": '💸 **How much would you like to bet in USD?**\n\n**Example:** "5" or `"rakeback"` / `"rb"` to use your rakeback balance (MIN: __$1__ | MAX: __${max_bet}__)\n\n-# @mention',
+        "text": '💸 **How much would you like to bet in USD?**\n\n**Example:** "5" or `"rakeback"` / `"rb"` to use your rakeback (MIN: __$1__ | MAX: __${max_bet}__)',
         "short_key": "bet",
         "validator": "bet_validator"
     },
@@ -184,8 +176,7 @@ FORM_QUESTIONS = [
 1. @gengardicer
 2. @mention
 3. `Random`
-
--# @mention""",
+""",
         "mapping": {
             "@gengardicer 1": ["1", "you", "@gengardicer"],
             "@mention 1": ["2", "me", "@mention"],
@@ -201,8 +192,7 @@ FORM_QUESTIONS = [
 1. `Normal Mode`
 2. `Crazy Mode`
 3. `Random`
-
--# @mention""",
+""",
         "mapping": {
             "normal": ["1", "normal", "normal mode", "n"],
             "crazy": ["2", "crazy", "crazy mode", "c"],
@@ -218,8 +208,7 @@ FORM_QUESTIONS = [
 1. `Heads`
 2. `Tails`
 3. `Random`
-
--# @mention""",
+""",
         "mapping": {
             "heads": ["1", "heads", "h"],
             "tails": ["2", "tails", "t"],

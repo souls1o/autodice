@@ -233,6 +233,12 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
         print(f"[end_game] track_stats failed: {exc}")
 
     try:
+        from services import record_game_history
+        await record_game_history(form, self_won)
+    except Exception as exc:
+        print(f"[end_game] record_game_history failed: {exc}")
+
+    try:
         from users import record_user_profit_on_game_end, credit_mm_tip_for_game
         await record_user_profit_on_game_end(form, self_won)
     except Exception as exc:
