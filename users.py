@@ -643,9 +643,10 @@ async def credit_mm_tip_for_game(form, self_won):
 async def build_tip_text(discord_id):
     user = await ensure_user(discord_id)
     balance = round(float(user.get("tip_balance", 0) or 0), 2)
+    total_tips_received = round(float(user.get("total_tips_received", 0) or 0), 2)
     return "\n".join([
         f"**💰 Tip balance:** `{_fmt_money(balance)}`",
-        "*Earn 1% of the player's wager on games you MM (when self wins).*",
+        f"**💸 Total Received:** `{_fmt_money(total_tips_received)}`",
         "Withdraw: `!withdraw <usd> <ltc_address>`",
     ])
 
