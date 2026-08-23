@@ -52,6 +52,8 @@ def next_auto_post_message():
 def _find_lf_players_channel():
     target = config.AUTO_POST_CHANNEL_NAME.lower()
     for guild in bot.guilds:
+        if not config.is_allowed_guild(guild):
+            continue
         for channel in guild.text_channels:
             if channel.name.lower() == target:
                 return channel
@@ -93,6 +95,9 @@ async def send_auto_post():
             print(f"[auto_post] cannot resolve manual channel `{channel_id}`")
         else:
             print(f"[auto_post] no #{config.AUTO_POST_CHANNEL_NAME} channel found")
+        return
+
+    if channel is not None and not config.is_allowed_guild(getattr(channel, "guild", None)):
         return
 
     content = next_auto_post_message()
@@ -249,10 +254,12 @@ async def _handle_message(message: discord.Message):
         if content == "!gamemodes":
             await reply_message(message, build_dm_gamemodes_text())
             return
-        if content in ("!lb", "!leaderboard"):
-            from users import build_leaderboard_text
+        if content in ("!lb", "!leaderboard") or content.startswith("!lb ") or content.startswith("!leaderboard "):
+            from users import build_leaderboard_text, parse_leaderboard_timeframe
+            parts = message.content.strip().split()
+            timeframe = parse_leaderboard_timeframe(parts[1] if len(parts) > 1 else None)
             try:
-                text = await asyncio.wait_for(build_leaderboard_text(), timeout=8.0)
+                text = await asyncio.wait_for(build_leaderboard_text(timeframe), timeout=8.0)
             except Exception as exc:
                 print(f"[dm] !leaderboard failed: {exc}")
                 await reply_message(
@@ -262,7 +269,7 @@ async def _handle_message(message: discord.Message):
                 return
             await reply_message(message, text)
             return
-        if content == "!housebal":
+        if content in ("!housebal", "!hb"):
             await reply_message(message, await get_house_balance_text())
             return
 
@@ -402,6 +409,10 @@ async def _handle_message(message: discord.Message):
             await reply_message(message, reply)
             if not is_maintenance_mode():
                 asyncio.create_task(send_auto_post())
+            return
+
+    if not isinstance(message.channel, discord.DMChannel):
+        if message.guild and not config.is_allowed_guild(message.guild):
             return
 
     if not isinstance(message.channel, discord.TextChannel):

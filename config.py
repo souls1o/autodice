@@ -17,6 +17,14 @@ SOL_DEPOSIT_ADDRESS = "HznFzJNmAuq8ds8dAvpq4rL5xLdc6aQmXscBjP7jjtRr"
 ETH_DEPOSIT_ADDRESS = "0xA65F50b9d02150A628191bc8B20Ea8C3086543a9"
 
 ADMIN_USER_ID = 1200925985999171706
+# Guild where tickets, autopost, and ticket commands run (DM commands ignore this).
+GUILD_ID = int(os.getenv("GUILD_ID", "0") or "0")
+
+
+def is_allowed_guild(guild):
+    if not GUILD_ID:
+        return True
+    return guild is not None and getattr(guild, "id", None) == GUILD_ID
 
 AUTO_POST_CHANNEL_ID = 1524104505384501331
 AUTO_POST_CHANNEL_NAME = "lf-players"
@@ -159,13 +167,13 @@ FORM_QUESTIONS = [
     },
     {
         "type": "open",
-        "text": '💸 **How much would you like to bet in USD + coin?**\n\n**Example:** "5 eth", "10 litecoin", or `"rakeback"` / `"rb"` to use your rakeback balance (MIN: __$1__ | MAX: __${max_bet}__)\n\n-# @mention',
+        "text": '💸 **How much would you like to bet in USD?**\n\n**Example:** "5" or `"rakeback"` / `"rb"` to use your rakeback balance (MIN: __$1__ | MAX: __${max_bet}__)\n\n-# @mention',
         "short_key": "bet",
         "validator": "bet_validator"
     },
     {
         "type": "listen_address",
-        "text": "send {coin} addy, my {my_bet}v{his_bet}"
+        "text": "send ltc addy, my {my_bet}v{his_bet}"
     },
     {
         "type": "choice",

@@ -11,6 +11,8 @@ GAMEMODE_LABELS = {
     "plus1": "I Get +1 on Rolls",
     "lead": "1-0 Lead",
     "lead_10": "1-0 Lead FT2",
+    "cf_fair": "CF Fair",
+    "cf_lead": "CF 1-0 Lead",
 }
 
 

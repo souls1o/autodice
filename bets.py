@@ -99,9 +99,9 @@ def get_max_bet(form):
         return 200
     if gamemode == "7s_ties" and first_to == "ft5":
         return 65
-    if (gamemode == "7s" and first_to == "ft5") or (gamemode == "7s_ties" and first_to == "ft3"):
+    if gamemode == "7s_ties" and first_to == "ft3":
         return 75
-    if gamemode == "7s" and first_to == "ft3":
+    if (gamemode == "7s" and first_to == "ft3") or (gamemode == "7s" and first_to == "ft5"):
         return 200
     if gamemode in ("fair", "ties", "plus1", "lead"):
         return 200
@@ -200,14 +200,94 @@ def calculate_my_bet(form):
 
 
 def get_bet_info(form):
-    parts = form.get("responses", {}).get("bet", "0 ltc").split()
+    raw = (form.get("responses", {}).get("bet") or "0 ltc").strip()
+    parts = raw.split()
     his_bet_usd = float(parts[0])
     if len(parts) >= 2 and parts[-1].lower() == "rakeback":
-        coin = normalize_coin(form.get("winnings_coin") or "ltc")
+        coin = "ltc"
     else:
-        coin = normalize_coin(parts[-1])
+        coin = "ltc"
     my_bet_usd = calculate_my_bet(form) or 0.0
     return his_bet_usd, my_bet_usd, coin
+
+
+def normalize_bet_response(response):
+    """Store player bets as '<amount> ltc' (LTC-only wagers)."""
+    text = (response or "").strip()
+    if text.lower() in ("rakeback", "rb"):
+        return text.lower()
+    try:
+        amount = float(text.split()[0] if text.split() else text)
+    except ValueError:
+        return text
+    return f"{format_bet_display(amount)} ltc"
+
+
+def get_self_hold_usd(form_or_session):
+    data = form_or_session or {}
+    if "self_hold_usd" in data:
+        val = data["self_hold_usd"]
+    else:
+        val = data.get("winnings_usd", 0)
+    return max(round(float(val or 0), 2), 0.0)
+
+
+def get_player_hold_usd(form_or_session):
+    data = form_or_session or {}
+    return max(round(float(data.get("player_hold_usd", 0) or 0), 2), 0.0)
+
+
+def sync_legacy_winnings(form):
+    """Keep legacy winnings_usd aligned with self hold for funding paths."""
+    form["self_hold_usd"] = round(float(form.get("self_hold_usd", form.get("winnings_usd", 0) or 0)), 8)
+    form["player_hold_usd"] = round(float(form.get("player_hold_usd", 0) or 0), 8)
+    form["winnings_usd"] = form["self_hold_usd"]
+    form.setdefault("winnings_coin", "ltc")
+
+
+def add_self_hold_usd(form, usd):
+    sync_legacy_winnings(form)
+    form["self_hold_usd"] = round(form["self_hold_usd"] + float(usd), 8)
+    form["winnings_usd"] = form["self_hold_usd"]
+    try:
+        form["winnings_crypto"] = round(
+            form.get("winnings_crypto", 0) + usd_to_crypto_amount(float(usd), "ltc"), 8
+        )
+    except Exception:
+        pass
+
+
+def add_player_hold_usd(form, usd):
+    sync_legacy_winnings(form)
+    form["player_hold_usd"] = round(form["player_hold_usd"] + float(usd), 8)
+
+
+def subtract_self_hold_usd(form, usd):
+    sync_legacy_winnings(form)
+    deduct = min(float(usd), form["self_hold_usd"])
+    if deduct <= 0:
+        return 0.0
+    form["self_hold_usd"] = round(form["self_hold_usd"] - deduct, 8)
+    form["winnings_usd"] = form["self_hold_usd"]
+    try:
+        form["winnings_crypto"] = round(
+            max(form.get("winnings_crypto", 0) - usd_to_crypto_amount(deduct, "ltc"), 0), 8
+        )
+    except Exception:
+        pass
+    return deduct
+
+
+def clear_self_hold(form):
+    sync_legacy_winnings(form)
+    form["self_hold_usd"] = 0.0
+    form["winnings_usd"] = 0.0
+    form["winnings_crypto"] = 0.0
+
+
+def clear_player_hold(form):
+    sync_legacy_winnings(form)
+    form["player_hold_usd"] = 0.0
 
 
 def display_his_bet_usd(form):
@@ -294,21 +374,16 @@ def sync_winnings_crypto(form):
 
 
 def get_ticket_hold_usd(form):
-    return max(round(float(form.get("winnings_usd", 0)), 2), 0.0)
+    return get_self_hold_usd(form)
 
 
 def bet_validator(response, form=None):
     text = response.strip().lower()
     if text in ("rakeback", "rb"):
         return True
-    parts = response.strip().split()
-    if len(parts) != 2:
-        return False
     try:
-        amount = float(parts[0])
+        amount = float(text.split()[0] if text.split() else text)
     except ValueError:
-        return False
-    if normalize_coin(parts[1]) not in ("btc", "eth", "ltc"):
         return False
     if not form:
         return 1 <= amount <= 50

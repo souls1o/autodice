@@ -75,6 +75,10 @@ def note_mm_cf_command(message, form):
         return False
     if not _is_cf_mm(form, message.author):
         return False
+    if state.get("scoring"):
+        return False
+    if state.get("pending_cf_cmd_id"):
+        return True
     if message.id in state.get("consumed_cf_cmd_ids", set()):
         return True
     state["pending_cf_cmd_id"] = message.id
@@ -705,6 +709,8 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
     state = form["game_state"]
     if state.get("scoring"):
         return
+    if not state.get("waiting_for_embed"):
+        return
     consumed = state.setdefault("consumed_embed_ids", set())
     consumed_cmds = state.setdefault("consumed_cf_cmd_ids", set())
     if message.id in consumed:
@@ -720,6 +726,10 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
     if cmd.id in consumed_cmds:
         return
     if not _is_cf_mm(form, cmd.author):
+        return
+
+    pending = state.get("pending_cf_cmd_id")
+    if not pending or cmd.id != pending:
         return
 
     consumed.add(message.id)
@@ -820,7 +830,8 @@ async def start_game(channel, form, bot_user, bot=None):
             "consumed_embed_ids": set(),
             "consumed_cf_cmd_ids": set(),
         }
-        await send_channel(channel, f"`{self_score}-{adder_score}`")
+        if is_lead:
+            await send_channel(channel, f"`{self_score}-{adder_score}`")
         return
 
     first_to = int(responses.get("first_to", "ft3").replace("ft", ""))

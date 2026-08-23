@@ -8,6 +8,8 @@ import config
 from bets import (
     bet_validator,
     calculate_my_bet,
+    clear_player_hold,
+    clear_self_hold,
     display_his_bet_usd,
     extract_crypto_address,
     format_bet_display,
@@ -15,9 +17,11 @@ from bets import (
     get_bet_info,
     get_max_bet,
     get_price,
+    get_self_hold_usd,
     get_wager_usd,
+    normalize_bet_response,
     normalize_coin,
-    add_winnings_usd,
+    add_self_hold_usd,
     sync_winnings_crypto,
     usd_to_smallest_unit,
 )
@@ -57,6 +61,7 @@ COIN_ADDRESS_COMMANDS = {
 TICKET_COMMANDS = frozenset({
     "!ltc", "!eth", "!sol",
     "!restart", "!hold", "!profile", "!rerun", "!cancel",
+    "!clearhold", "!changebet",
 })
 TICKET_CMD_COOLDOWN_SECONDS = 3.0
 _ticket_cmd_cooldown = {}  # (channel_id, user_id) -> monotonic timestamp
@@ -84,14 +89,16 @@ def build_dm_help_text(user_id):
         "`!help` — show this list",
         "`!profile` — wagered, profit, level, rakeback & fair edge",
         "`!gamemodes` — dice & coinflip gamemode info",
-        "`!lb` / `!leaderboard` — top & bottom profit players",
-        "`!housebal` — house balance in USD (BTC, ETH, LTC)",
+        "`!lb` / `!leaderboard` [t/w/m] — top & bottom profit, top wagered",
+        "`!housebal` / `!hb` — house balance in USD",
         "",
         "**🎫 Ticket commands**",
         "`!ltc` / `!eth` / `!sol` — get a deposit address",
         "`!hold` — show current winnings for this ticket",
         "`!profile` — wagered, profit, level, rakeback & fair edge",
         "`!rerun` — rerun with a new bet amount",
+        "`!changebet <usd>` — change bet before a game starts",
+        "`!clearhold 1|2` — clear self or player hold",
         "`!restart` — restart the bet form (only before funds are sent)",
         "`!cancel` — cancel and payout winnings if any",
     ]
@@ -140,7 +147,14 @@ def message_starts_with(message, prefix):
 
 
 def is_roll_command(content):
-    return (content or "").strip().lower().startswith("-roll")
+    text = (content or "").strip()
+    lower = text.lower()
+    if not lower.startswith("-roll"):
+        return False
+    rest = text[5:]
+    if not rest:
+        return True
+    return rest[0] == " "
 
 
 def is_cf_command(content):
@@ -288,6 +302,8 @@ def was_bot_added_to_channel(channel, bot_user, before=None):
 def should_process_channel(channel, message=None, bot_user=None):
     if is_channel_blacklisted(channel):
         return False
+    if getattr(channel, "guild", None) and not config.is_allowed_guild(channel.guild):
+        return False
     if is_ticket_channel(channel):
         return True
     if message is not None and bot_user is not None and message_references_bot(message, bot_user):
@@ -318,6 +334,8 @@ async def resolve_ticket_user_id(channel, bot_user, *, was_tracked=False):
 
 
 async def handle_bot_added_to_channel(bot, channel):
+    if not config.is_allowed_guild(channel.guild):
+        return
     if is_maintenance_mode():
         await notify_maintenance(channel)
         return
@@ -408,7 +426,7 @@ async def _fund_from_hold_or_saved_address(channel, form):
     """
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
     wager_usd = my_bet_usd
-    hold_usd = max(form.get("winnings_usd", 0), 0)
+    hold_usd = get_self_hold_usd(form)
     from_hold = round(min(hold_usd, wager_usd), 2)
     shortfall = round(wager_usd - from_hold, 2)
     address = form.get("payout_address")
@@ -448,7 +466,7 @@ async def _fund_from_hold_or_saved_address(channel, form):
         return False
 
     # Credit top-up into hold so the full wager can be staked from hold on confirm
-    add_winnings_usd(form, shortfall, coin)
+    add_self_hold_usd(form, shortfall)
     sync_winnings_crypto(form)
     form["pending_hold_deduct"] = wager_usd
     form["pending_wager_usd"] = wager_usd
@@ -526,7 +544,7 @@ async def ask_next_step(channel, bot_user):
             return
         _, _, fund_coin = get_bet_info(form)
         dynamic.update({
-            "coin": fund_coin,
+            "coin": "ltc",
             "my_bet": format_bet_display(calculate_my_bet(form) or 0),
             "his_bet": format_bet_display(display_his_bet_usd(form)),
         })
@@ -538,6 +556,10 @@ async def ask_next_step(channel, bot_user):
         form["waiting_for_confirm"] = True
 
     await safe_channel_send(channel, question_text, form=form)
+    if q["type"] == "listen_confirm":
+        mm_id = form.get("funds_recipient_id")
+        if mm_id:
+            await send_channel(channel, f"<@{mm_id}>")
 
 
 async def handle_form_step(message, form, bot_user):
@@ -588,13 +610,25 @@ async def handle_form_step(message, form, bot_user):
             form.pop("rakeback_bet", None)
             form.pop("rakeback_stake", None)
         if q.get("short_key"):
-            form["responses"][q["short_key"]] = response
+            if q.get("validator") == "bet_validator" and q["short_key"] == "bet":
+                form["responses"][q["short_key"]] = normalize_bet_response(response)
+            else:
+                form["responses"][q["short_key"]] = response
         form["step"] += 1
         await ask_next_step(message.channel, bot_user)
 
 
 async def handle_ticket_command(message, bot_user, bot=None):
     content = message.content.strip().lower()
+    cmd = content.split()[0] if content else ""
+
+    if cmd == "!changebet":
+        await handle_changebet_command(message, bot_user)
+        return True
+    if cmd == "!clearhold":
+        await handle_clearhold_command(message, bot_user)
+        return True
+
     if content not in TICKET_COMMANDS:
         return False
 
@@ -615,9 +649,8 @@ async def handle_ticket_command(message, bot_user, bot=None):
         else:
             address = await create_apirone_address(coin)
         if address:
-            from postgame import post_payout_address_and_clear_hold
-            form = get_form(message.channel.id)
-            await post_payout_address_and_clear_hold(message.channel, address, form)
+            from postgame import post_payout_address
+            await post_payout_address(message.channel, address)
         else:
             await send_channel(message.channel, f"❌ Failed to generate {label} address.")
         return True
@@ -627,7 +660,7 @@ async def handle_ticket_command(message, bot_user, bot=None):
         return True
 
     if content == "!hold":
-        await handle_hold_command(message)
+        await handle_hold_command(message, bot_user)
         return True
 
     if content == "!profile":
@@ -657,14 +690,87 @@ async def handle_ticket_command(message, bot_user, bot=None):
     return False
 
 
-async def handle_hold_command(message):
-    winnings_usd, winnings_crypto, coin = get_hold_data(message.channel.id)
+async def handle_hold_command(message, bot_user):
+    channel = message.channel
+    self_hold, player_hold, _coin = get_hold_data(channel.id)
+    form = get_form(channel.id)
+    if not form:
+        session = get_ticket_session(channel.id)
+        form = {"ticket_user_id": session.get("ticket_user_id")}
+    mention = ticket_mention(channel, form)
     await send_channel(
-        message.channel,
+        channel,
         f"**Hold for this ticket**\n"
-        f"**Winnings:** `${winnings_usd:.2f}`\n"
-        f"**{coin.upper()}:** `{winnings_crypto}`",
+        f"**{bot_user.mention}:** `${self_hold:.2f}`\n"
+        f"**{mention}:** `${player_hold:.2f}`",
     )
+
+
+async def handle_clearhold_command(message, bot_user):
+    channel = message.channel
+    parts = message.content.strip().split()
+    if len(parts) < 2 or parts[1] not in ("1", "2"):
+        await send_channel(channel, "Usage: `!clearhold 1` (self) or `!clearhold 2` (player)")
+        return
+    form = get_form(channel.id)
+    session = get_ticket_session(channel.id)
+    target = form if form else session
+    if parts[1] == "1":
+        if form:
+            clear_self_hold(form)
+            save_session_from_form(channel.id, form)
+        else:
+            session["self_hold_usd"] = 0.0
+            session["winnings_usd"] = 0.0
+            session["winnings_crypto"] = 0.0
+        await send_channel(channel, f"✅ Cleared {bot_user.mention} hold.")
+    else:
+        if form:
+            clear_player_hold(form)
+            save_session_from_form(channel.id, form)
+        else:
+            session["player_hold_usd"] = 0.0
+        player_form = form or {"ticket_user_id": session.get("ticket_user_id")}
+        await send_channel(
+            channel,
+            f"✅ Cleared {ticket_mention(channel, player_form)} hold.",
+        )
+
+
+async def handle_changebet_command(message, bot_user):
+    channel = message.channel
+    form = get_form(channel.id)
+    if not form:
+        await send_channel(channel, "❌ No active ticket.")
+        return
+    if message.author.id != form.get("ticket_user_id"):
+        return
+    if form.get("game_state"):
+        await send_channel(channel, "❌ Cannot change bet while a game is in progress.")
+        return
+    parts = message.content.strip().split()
+    if len(parts) < 2:
+        await send_channel(channel, "Usage: `!changebet <usd>`")
+        return
+    try:
+        amount = float(parts[1])
+    except ValueError:
+        await send_channel(channel, "❌ Amount must be a number.")
+        return
+    normalized = normalize_bet_response(str(amount))
+    if not bet_validator(normalized, form):
+        await send_channel(channel, "❌ Invalid amount or out of range.")
+        return
+    form["responses"]["bet"] = normalized
+    form.pop("rakeback_bet", None)
+    form.pop("rakeback_stake", None)
+    my_bet = calculate_my_bet(form) or 0
+    player_bet = display_his_bet_usd(form)
+    await send_channel(
+        channel,
+        f"`{format_bet_display(my_bet)}v{format_bet_display(player_bet)}`",
+    )
+    save_session_from_form(channel.id, form)
 
 
 async def handle_rerun_command(message, bot_user, bot=None):
@@ -712,15 +818,14 @@ async def handle_cancel_command(message, bot_user):
     form["waiting_for_address"] = False
     form["waiting_for_adder_confirm"] = False
 
-    from postgame import payout_winnings_if_any, post_payout_address_and_clear_hold
+    from postgame import payout_winnings_if_any, post_payout_address
 
     if funds_sent:
-        _, _, coin = get_bet_info(form)
-        refund_address = await create_apirone_address(coin)
+        refund_address = await create_apirone_address("ltc")
         if refund_address:
-            await post_payout_address_and_clear_hold(channel, refund_address, form)
+            await post_payout_address(channel, refund_address)
         else:
-            await send_channel(channel, f"❌ Failed to generate {coin.upper()} refund address.")
+            await send_channel(channel, "❌ Failed to generate LTC refund address.")
 
     active_forms[channel.id] = form
     await payout_winnings_if_any(channel, form)
@@ -765,7 +870,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
         return
 
     if form.get("waiting_for_address") and member_has_listen_role(message.author):
-        _, _, coin = get_bet_info(form)
+        coin = "ltc"
         address = extract_crypto_address(message.content, coin)
         if address:
             recipient_id = await resolve_funds_recipient(message.channel, message)
@@ -776,7 +881,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                 )
                 return
             wager_usd = get_wager_usd(form)
-            hold_usd = max(form.get("winnings_usd", 0), 0)
+            hold_usd = get_self_hold_usd(form)
             from_hold = round(min(hold_usd, wager_usd), 2)
             shortfall = round(wager_usd - from_hold, 2)
 
@@ -790,7 +895,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                         f"❌ Transfer failed: {err if isinstance(err, str) else err}",
                     )
                     return
-                add_winnings_usd(form, shortfall, coin)
+                add_self_hold_usd(form, shortfall)
                 sync_winnings_crypto(form)
                 from_hold = wager_usd
                 await send_channel(
@@ -816,19 +921,34 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             form["step"] += 1
             await ask_next_step(message.channel, bot_user)
 
-    if form.get("waiting_for_confirm"):
+    if form.get("waiting_for_confirm") or form.get("waiting_for_adder_confirm"):
         expected = form.get("confirm_text")
-    
-        if expected and message.content.strip() == expected.strip() and member_has_listen_role(message.author):
+
+        if (
+            message.author.id == form["ticket_user_id"]
+            and is_adder_confirm(message.content)
+        ):
+            form["player_conf_pending"] = True
+            if form.get("waiting_for_adder_confirm"):
+                form["waiting_for_confirm"] = False
+                form["waiting_for_adder_confirm"] = False
+                form.pop("player_conf_pending", None)
+                await start_game_fn(message.channel, form, bot_user, bot)
+                return
+
+        if (
+            form.get("waiting_for_confirm")
+            and expected
+            and message.content.strip() == expected.strip()
+            and member_has_listen_role(message.author)
+        ):
             form["game_confirmer_user_id"] = message.author.id
             await reply_message(message, "conf")
             form["waiting_for_adder_confirm"] = True
-
-        if (
-            form.get("waiting_for_adder_confirm")
-            and message.author.id == form["ticket_user_id"]
-            and is_adder_confirm(message.content)
-        ):
-            form["waiting_for_confirm"] = False
-            form["waiting_for_adder_confirm"] = False
-            await start_game_fn(message.channel, form, bot_user, bot)
+            mm_id = form.get("funds_recipient_id") or message.author.id
+            await send_channel(message.channel, f"<@{mm_id}>")
+            if form.get("player_conf_pending"):
+                form["waiting_for_confirm"] = False
+                form["waiting_for_adder_confirm"] = False
+                form.pop("player_conf_pending", None)
+                await start_game_fn(message.channel, form, bot_user, bot)

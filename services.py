@@ -119,11 +119,50 @@ def _format_period(label, totals):
     )
 
 
-def _top_game(stats):
-    most = stats.get("most_played_game") or {}
+def _top_gamemode(stats):
+    most = stats.get("most_played_gamemode") or stats.get("most_played_game") or {}
     if not isinstance(most, dict) or not most:
         return "None"
-    return max(most, key=most.get).title()
+    key = max(most, key=most.get)
+    from notifications import GAMEMODE_LABELS
+    return GAMEMODE_LABELS.get(key, key.replace("_", " ").title())
+
+
+def period_date_keys(period):
+    """PST calendar date keys (YYYY-MM-DD) for daily/weekly/monthly buckets."""
+    today = _stats_today()
+    if period in ("daily", "today", "t"):
+        return {today.strftime("%Y-%m-%d")}
+    if period in ("weekly", "week", "w"):
+        start = _week_start_sunday(today)
+        keys = set()
+        day = start
+        while day <= today:
+            keys.add(day.strftime("%Y-%m-%d"))
+            day += timedelta(days=1)
+        return keys
+    if period in ("monthly", "month", "m"):
+        start = _month_start(today)
+        keys = set()
+        day = start
+        while day <= today:
+            keys.add(day.strftime("%Y-%m-%d"))
+            day += timedelta(days=1)
+        return keys
+    return None
+
+
+def _gamemode_stats_key(form):
+    responses = form.get("responses", {}) or {}
+    gamemode = responses.get("gamemode", "fair")
+    if gamemode == "lead_10":
+        gamemode = "lead"
+    game = responses.get("game", "dice")
+    if game == "coinflip" and gamemode == "fair":
+        return "cf_fair"
+    if game == "coinflip" and gamemode == "lead":
+        return "cf_lead"
+    return gamemode
 
 
 async def get_stats():
@@ -133,10 +172,12 @@ async def get_stats():
             "_id": "global",
             "daily": {},
             "all_time": dict(_EMPTY_PERIOD),
-            "most_played_game": {},
+            "most_played_gamemode": {},
             "unique_users": [],
         }
         await stats_collection.insert_one(stats)
+    if not isinstance(stats.get("most_played_gamemode"), dict):
+        stats["most_played_gamemode"] = stats.get("most_played_game") or {}
     if not isinstance(stats.get("most_played_game"), dict):
         stats["most_played_game"] = {}
     return stats
@@ -194,8 +235,9 @@ async def track_stats(form, self_won):
     if user_id not in unique:
         unique.append(user_id)
 
-    most = stats.setdefault("most_played_game", {})
-    most[game] = most.get(game, 0) + 1
+    most = stats.setdefault("most_played_gamemode", {})
+    gm_key = _gamemode_stats_key(form)
+    most[gm_key] = most.get(gm_key, 0) + 1
 
     await update_stats(stats)
 
@@ -210,9 +252,7 @@ async def build_stats_text():
         _format_period("Monthly", _period_totals(stats, "monthly")),
         _format_period("All Time", _period_totals(stats, "all_time")),
         "",
-        f"**Most played:** {_top_game(stats)}",
-        "",
-        await get_house_balance_text(),
+        f"**Most played:** {_top_gamemode(stats)}",
     ]
     return "\n".join(lines)
 
@@ -350,22 +390,5 @@ async def get_house_balance_text():
     data = await get_account_balance()
     if not data:
         return "❌ Could not fetch house balance from Apirone."
-
-    balances = {
-        entry.get("currency", "").lower(): entry.get("total", 0)
-        for entry in data.get("balance", [])
-    }
-
-    lines = ["**🏦 House Balance**"]
-    total_usd = 0.0
-    for coin in HOUSE_COINS:
-        smallest = balances.get(coin, 0)
-        try:
-            usd = _coin_balance_usd(coin, smallest)
-        except Exception:
-            usd = 0.0
-        total_usd += usd
-        lines.append(f"**{coin.upper()}:** `${usd:,.2f}`")
-
-    lines.append(f"**Total:** `${total_usd:,.2f}`")
-    return "\n".join(lines)
+    total_usd = await get_house_balance_usd()
+    return f"**🏦 House Balance**\n*Balance:* `${total_usd:,.2f}`"

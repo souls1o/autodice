@@ -383,6 +383,7 @@ async def record_user_wager_on_game_start(form):
         his_bet_usd,
         credit_rakeback=True,
     )
+    await _inc_user_daily(user_id, wagered=his_bet_usd)
     apply_user_perks_to_form(form, user)
     return user
 
@@ -421,6 +422,7 @@ async def record_user_profit_on_game_end(form, self_won):
         delta = round(my_bet_usd, 2)
     else:
         delta = round(-his_bet_usd if self_won else my_bet_usd, 2)
+    await _inc_user_daily(user_id, profit=delta)
     return await add_user_profit(user_id, delta)
 
 
@@ -493,27 +495,101 @@ async def build_profile_text(discord_id, *, create=True, for_admin_lookup=False)
     ])
 
 
-async def build_leaderboard_text():
-    """Top 5 highest profit and top 5 most negative profit players."""
-    projection = {"discord_id": 1, "profit": 1}
-    top = await users_collection.find({}, projection).sort("profit", -1).limit(5).to_list(5)
-    bottom = await users_collection.find({}, projection).sort("profit", 1).limit(5).to_list(5)
+async def _inc_user_daily(user_id, *, profit=0.0, wagered=0.0):
+    from services import _stats_date_key
 
-    def _line(rank, user):
+    profit = round(float(profit or 0), 2)
+    wagered = round(float(wagered or 0), 2)
+    if profit == 0 and wagered == 0:
+        return
+    today = _stats_date_key()
+    await users_collection.update_one(
+        {"_id": _user_id(user_id)},
+        {
+            "$inc": {
+                f"daily.{today}.profit": profit,
+                f"daily.{today}.wagered": wagered,
+            }
+        },
+        upsert=True,
+    )
+
+
+def parse_leaderboard_timeframe(arg):
+    if not arg:
+        return "all"
+    key = str(arg).lower()
+    if key in ("t", "today"):
+        return "daily"
+    if key in ("w", "week"):
+        return "weekly"
+    if key in ("m", "month"):
+        return "monthly"
+    return "all"
+
+
+def _user_period_totals(user, period):
+    if period == "all":
+        return (
+            round(float(user.get("profit", 0) or 0), 2),
+            round(float(user.get("wagered", 0) or 0), 2),
+        )
+    from services import period_date_keys
+
+    keys = period_date_keys(period)
+    daily = user.get("daily") or {}
+    profit = wagered = 0.0
+    for key in keys or []:
+        entry = daily.get(key) or {}
+        profit += float(entry.get("profit", 0) or 0)
+        wagered += float(entry.get("wagered", 0) or 0)
+    return round(profit, 2), round(wagered, 2)
+
+
+def _leaderboard_label(period):
+    return {
+        "all": "All Time",
+        "daily": "Today",
+        "weekly": "This Week",
+        "monthly": "This Month",
+    }.get(period, "All Time")
+
+
+async def build_leaderboard_text(timeframe="all"):
+    """Top/bottom profit and top wagered for a timeframe."""
+    period = timeframe if timeframe in ("all", "daily", "weekly", "monthly") else "all"
+    label = _leaderboard_label(period)
+    projection = {"discord_id": 1, "profit": 1, "wagered": 1, "daily": 1}
+    users = await users_collection.find({}, projection).to_list(None)
+
+    ranked = []
+    for user in users:
+        profit, wagered = _user_period_totals(user, period)
         uid = user.get("discord_id") or user.get("_id")
-        profit = round(float(user.get("profit", 0) or 0), 2)
-        return f"`{rank}.` <@{uid}> — `{_fmt_money(profit)}`"
+        ranked.append({"id": uid, "profit": profit, "wagered": wagered})
 
-    lines = ["**🏆 Leaderboard**", "", "**Top Profit**"]
-    if top:
-        lines.extend(_line(i, u) for i, u in enumerate(top, 1))
+    top_profit = sorted(ranked, key=lambda u: u["profit"], reverse=True)[:5]
+    bottom_profit = sorted(ranked, key=lambda u: u["profit"])[:5]
+    top_wagered = sorted(ranked, key=lambda u: u["wagered"], reverse=True)[:5]
+
+    def _line(rank, entry, field):
+        return f"`{rank}.` <@{entry['id']}> — `{_fmt_money(entry[field])}`"
+
+    lines = [f"**🏆 Leaderboard — {label}**", "", "**Top Profit**"]
+    if top_profit:
+        lines.extend(_line(i, u, "profit") for i, u in enumerate(top_profit, 1))
     else:
-        lines.append("_No players yet._")
+        lines.append("_No data yet._")
     lines.extend(["", "**Most Negative**"])
-    if bottom:
-        lines.extend(_line(i, u) for i, u in enumerate(bottom, 1))
+    if any(u["profit"] for u in bottom_profit):
+        lines.extend(_line(i, u, "profit") for i, u in enumerate(bottom_profit, 1))
     else:
-        lines.append("_No players yet._")
+        lines.append("_No data yet._")
+    lines.extend(["", "**Top Wagered**"])
+    if top_wagered:
+        lines.extend(_line(i, u, "wagered") for i, u in enumerate(top_wagered, 1))
+    else:
+        lines.append("_No data yet._")
     return "\n".join(lines)
 
 

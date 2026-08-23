@@ -88,6 +88,8 @@ def save_session_from_form(channel_id, form):
         session["ticket_user_id"] = form["ticket_user_id"]
     session["winnings_usd"] = form.get("winnings_usd", 0.0)
     session["winnings_crypto"] = form.get("winnings_crypto", 0.0)
+    session["self_hold_usd"] = form.get("self_hold_usd", session["winnings_usd"])
+    session["player_hold_usd"] = form.get("player_hold_usd", 0.0)
     session["winnings_coin"] = form.get("winnings_coin", session.get("winnings_coin", "ltc"))
     session["total_wagered_usd"] = form.get("total_wagered_usd", 0.0)
     if form.get("funds_recipient_id"):
@@ -143,6 +145,8 @@ def apply_session_to_form(channel_id, form):
         form["ticket_user_id"] = session["ticket_user_id"]
     form["winnings_usd"] = session.get("winnings_usd", 0.0)
     form["winnings_crypto"] = session.get("winnings_crypto", 0.0)
+    form["self_hold_usd"] = session.get("self_hold_usd", session.get("winnings_usd", 0.0))
+    form["player_hold_usd"] = session.get("player_hold_usd", 0.0)
     form["winnings_coin"] = session.get("winnings_coin", "ltc")
     form["game_confirmer_user_id"] = session.get("game_confirmer_user_id")
     if session.get("payout_address") and not form.get("payout_address"):
@@ -157,22 +161,22 @@ def apply_session_to_form(channel_id, form):
 
 
 def get_hold_data(channel_id):
-    from bets import get_ticket_hold_usd, sync_winnings_crypto
+    from bets import get_player_hold_usd, get_self_hold_usd, sync_legacy_winnings, sync_winnings_crypto
 
     form = active_forms.get(channel_id)
     if form:
+        sync_legacy_winnings(form)
         sync_winnings_crypto(form)
         save_session_from_form(channel_id, form)
         return (
-            get_ticket_hold_usd(form),
-            form.get("winnings_crypto", 0.0),
+            get_self_hold_usd(form),
+            get_player_hold_usd(form),
             form.get("winnings_coin", "ltc"),
         )
     session = ticket_sessions.get(channel_id) or {}
-    hold_usd = max(round(float(session.get("winnings_usd", 0.0)), 2), 0.0)
     return (
-        hold_usd,
-        session.get("winnings_crypto", 0.0),
+        get_self_hold_usd(session),
+        get_player_hold_usd(session),
         session.get("winnings_coin", "ltc"),
     )
 
@@ -189,6 +193,8 @@ def new_form_dict(channel_id, ticket_user_id):
         "waiting_for_confirm": False,
         "winnings_usd": session.get("winnings_usd", 0.0),
         "winnings_crypto": session.get("winnings_crypto", 0.0),
+        "self_hold_usd": session.get("self_hold_usd", session.get("winnings_usd", 0.0)),
+        "player_hold_usd": session.get("player_hold_usd", 0.0),
         "winnings_coin": session.get("winnings_coin", "ltc"),
         "game_confirmer_user_id": session.get("game_confirmer_user_id"),
         "total_wagered_usd": session.get("total_wagered_usd", 0.0),

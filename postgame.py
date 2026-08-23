@@ -110,35 +110,38 @@ async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=Non
 
 
 async def record_winnings(channel, form, self_won):
-    from bets import is_rakeback_bet
+    from bets import (
+        add_player_hold_usd,
+        add_self_hold_usd,
+        get_self_hold_usd,
+        is_rakeback_bet,
+        subtract_self_hold_usd,
+        sync_legacy_winnings,
+    )
 
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
-    form.setdefault("winnings_usd", 0.0)
-    form.setdefault("winnings_crypto", 0.0)
-    form["winnings_coin"] = coin
+    sync_legacy_winnings(form)
+    form["winnings_coin"] = "ltc"
     stake_from_hold = form.pop("stake_from_hold", False)
     if self_won:
-        # Rakeback games: player stake isn't crypto — only recover house wager into hold.
         amount = my_bet_usd if is_rakeback_bet(form) else (my_bet_usd + his_bet_usd)
-        try:
-            await asyncio.to_thread(add_winnings_usd, form, amount, coin)
-        except Exception as exc:
-            form["winnings_usd"] = round(form.get("winnings_usd", 0) + amount, 8)
-            print(f"[record_winnings] crypto conversion failed: {exc}")
+        add_self_hold_usd(form, amount)
     elif not stake_from_hold:
-        try:
-            await asyncio.to_thread(subtract_winnings_usd, form, my_bet_usd, coin)
-        except Exception as exc:
-            print(f"[record_winnings] crypto conversion failed: {exc}")
+        subtract_self_hold_usd(form, my_bet_usd)
+        if not is_rakeback_bet(form):
+            add_player_hold_usd(form, his_bet_usd + my_bet_usd)
     sync_winnings_crypto(form)
     save_session_from_form(channel.id, form)
 
 
 async def send_rerun_shortfall_before_confirm(channel, form):
-    """Send crypto shortfall BEFORE confirmation; credit that amount into hold."""
+    """Send crypto shortfall BEFORE confirmation; credit that amount into self hold."""
+    from bets import add_self_hold_usd, get_self_hold_usd, sync_legacy_winnings
+
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
     wager_usd = my_bet_usd
-    winnings_usd = max(form.get("winnings_usd", 0), 0)
+    sync_legacy_winnings(form)
+    winnings_usd = get_self_hold_usd(form)
     from_hold = round(min(winnings_usd, wager_usd), 2)
     shortfall = round(wager_usd - from_hold, 2)
 
@@ -172,7 +175,7 @@ async def send_rerun_shortfall_before_confirm(channel, form):
         return False
 
     # Top-up becomes part of hold so confirm can stake the full wager from hold
-    add_winnings_usd(form, shortfall, coin)
+    add_self_hold_usd(form, shortfall)
     sync_winnings_crypto(form)
     form["rerun_shortfall_sent"] = shortfall
     form["pending_hold_deduct"] = wager_usd
@@ -186,21 +189,22 @@ async def send_rerun_shortfall_before_confirm(channel, form):
 
 
 async def apply_hold_after_confirm(channel, form):
-    """After confirmation: subtract from hold only if sufficient. Never sends crypto."""
+    """After confirmation: subtract from self hold only if sufficient. Never sends crypto."""
+    from bets import get_self_hold_usd, subtract_self_hold_usd, sync_legacy_winnings
+
     wager_usd = form.pop("pending_wager_usd", None)
     if wager_usd is None:
         wager_usd = get_wager_usd(form)
-    coin = get_bet_info(form)[2]
+    coin = "ltc"
     planned = float(form.pop("pending_hold_deduct", 0) or 0)
-    available = max(form.get("winnings_usd", 0), 0)
+    sync_legacy_winnings(form)
+    available = get_self_hold_usd(form)
     deduct = round(min(planned, available, wager_usd), 2)
     deducted = 0.0
 
     if deduct > 0:
-        try:
-            deducted = await asyncio.to_thread(subtract_winnings_usd, form, deduct, coin)
-        except Exception as exc:
-            print(f"[apply_hold_after_confirm] hold deduction failed: {exc}")
+        deducted = subtract_self_hold_usd(form, deduct)
+        if deducted <= 0:
             return False
 
     form.pop("rerun_shortfall_sent", None)
@@ -240,43 +244,22 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
         print(f"[end_game] post_victory_message failed: {exc}")
 
 
-async def post_payout_address_and_clear_hold(channel, address, form=None):
-    """
-    Post a house payout address (no matchup suffix), announce hold wipe, and zero hold.
-    """
-    from state import get_ticket_session
-
-    session = get_ticket_session(channel.id)
-    if form is not None:
-        hold_usd = max(round(float(form.get("winnings_usd", 0) or 0), 2), 0.0)
-        form["winnings_usd"] = 0.0
-        form["winnings_crypto"] = 0.0
-        sync_winnings_crypto(form)
-        save_session_from_form(channel.id, form)
-    else:
-        hold_usd = max(round(float(session.get("winnings_usd", 0) or 0), 2), 0.0)
-
-    session["winnings_usd"] = 0.0
-    session["winnings_crypto"] = 0.0
-
-    await send_channel(
-        channel,
-        f"`{address}` (SEND ALL, HOLD SET TO 0) (Hold: ${format_bet_display(hold_usd)})",
-    )
-    return hold_usd
+async def post_payout_address(channel, address):
+    """Post a house payout address without changing hold."""
+    await send_channel(channel, f"`{address}`")
 
 
 async def payout_winnings_if_any(channel, form):
+    from bets import get_self_hold_usd, sync_legacy_winnings
+
+    sync_legacy_winnings(form)
     sync_winnings_crypto(form)
-    winnings_usd = form.get("winnings_usd", 0)
-    winnings_crypto = form.get("winnings_crypto", 0)
-    if winnings_usd > 0 and winnings_crypto > 0:
-        coin = form.get("winnings_coin", "ltc")
-        address = await create_apirone_address(coin)
+    if get_self_hold_usd(form) > 0:
+        address = await create_apirone_address("ltc")
         if address:
-            await post_payout_address_and_clear_hold(channel, address, form)
+            await post_payout_address(channel, address)
         else:
-            await send_channel(channel, f"❌ Failed to generate {coin.upper()} address.")
+            await send_channel(channel, "❌ Failed to generate LTC address.")
     finish_form(channel, form, payout=True)
 
 
