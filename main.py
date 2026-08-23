@@ -232,14 +232,21 @@ async def _handle_message(message: discord.Message):
         content = message.content.strip().lower()
 
         if content == "!help":
-            await reply_message(message, build_dm_help_text(message.author.id))
+            from users import user_has_mm_role
+            is_mm = await user_has_mm_role(bot, message.author.id)
+            await reply_message(message, build_dm_help_text(message.author.id, is_mm=is_mm))
             return
-        if content == "!profile":
-            # Creates a user profile if missing.
-            from users import build_profile_text
+        if content.startswith("!profile"):
+            from users import resolve_profile_command
+            parts = message.content.strip().split(maxsplit=1)
+            raw_args = parts[1] if len(parts) > 1 else None
             try:
-                text = await asyncio.wait_for(
-                    build_profile_text(message.author.id),
+                text, err = await asyncio.wait_for(
+                    resolve_profile_command(
+                        message.author.id,
+                        raw_args,
+                        mentions=message.mentions,
+                    ),
                     timeout=8.0,
                 )
             except Exception as exc:
@@ -248,6 +255,25 @@ async def _handle_message(message: discord.Message):
                     message,
                     "❌ Could not load profile (database timeout). Try again in a moment.",
                 )
+                return
+            if err:
+                await reply_message(message, err)
+                return
+            await reply_message(message, text)
+            return
+        if content == "!tip":
+            from users import build_tip_text, user_has_mm_role
+            if not await user_has_mm_role(bot, message.author.id):
+                await reply_message(message, "❌ MM only command.")
+                return
+            try:
+                text = await asyncio.wait_for(
+                    build_tip_text(message.author.id),
+                    timeout=8.0,
+                )
+            except Exception as exc:
+                print(f"[dm] !tip failed for {message.author.id}: {exc}")
+                await reply_message(message, "❌ Could not load tip balance.")
                 return
             await reply_message(message, text)
             return
@@ -276,7 +302,7 @@ async def _handle_message(message: discord.Message):
         if content == "!stats" and message.author.id == config.ADMIN_USER_ID:
             await reply_message(message, await build_stats_text())
             return
-        if message.author.id == config.ADMIN_USER_ID and content.startswith("!ticket"):
+        if content.startswith("!ticket"):
             parts = message.content.strip().split(maxsplit=1)
             if len(parts) < 2:
                 await reply_message(message, "Usage: `!ticket <channel_id>`")
@@ -306,37 +332,53 @@ async def _handle_message(message: discord.Message):
                 return
             await reply_message(message, text)
             return
-        if message.author.id == config.ADMIN_USER_ID and content.startswith("!lookup"):
-            from users import build_profile_text, parse_discord_user_id
-            parts = message.content.strip().split(maxsplit=1)
-            if len(parts) < 2:
-                await reply_message(message, "Usage: `!lookup <user_id|@mention>`")
+        if content.startswith("!withdraw"):
+            parts = message.content.strip().split()
+            if len(parts) == 3:
+                from users import mm_withdraw_tip, user_has_mm_role
+                try:
+                    float(parts[1])
+                    is_numeric_amount = True
+                except ValueError:
+                    is_numeric_amount = False
+                if is_numeric_amount and await user_has_mm_role(bot, message.author.id):
+                    try:
+                        ok, text = await asyncio.wait_for(
+                            mm_withdraw_tip(message.author.id, parts[1], parts[2]),
+                            timeout=20.0,
+                        )
+                    except Exception as exc:
+                        print(f"[dm] !withdraw (tip) failed: {exc}")
+                        await reply_message(message, "❌ Withdraw failed (timeout or error).")
+                        return
+                    await reply_message(message, text)
+                    return
+            if message.author.id == config.ADMIN_USER_ID:
+                from services import admin_withdraw_usd
+                if len(parts) < 4:
+                    await reply_message(
+                        message,
+                        "Usage: `!withdraw <coin> <address> <usd>`\n"
+                        "Examples: `!withdraw ltc LTxxxx… 25`\n"
+                        "`!withdraw usdt@eth 0x… 50`  `!withdraw usdc@bnb 0x… 10`",
+                    )
+                    return
+                coin, address, usd_raw = parts[1], parts[2], parts[3]
+                try:
+                    ok, text = await asyncio.wait_for(
+                        admin_withdraw_usd(coin, address, usd_raw),
+                        timeout=20.0,
+                    )
+                except Exception as exc:
+                    print(f"[dm] !withdraw failed: {exc}")
+                    await reply_message(message, "❌ Withdraw failed (timeout or error).")
+                    return
+                await reply_message(message, text)
                 return
-            try:
-                target_id = parse_discord_user_id(parts[1], mentions=message.mentions)
-            except (TypeError, ValueError):
-                await reply_message(message, "❌ Invalid user id / mention.")
-                return
-            try:
-                text = await asyncio.wait_for(
-                    build_profile_text(
-                        target_id,
-                        create=False,
-                        for_admin_lookup=True,
-                    ),
-                    timeout=8.0,
-                )
-            except Exception as exc:
-                print(f"[dm] !lookup failed: {exc}")
-                await reply_message(message, "❌ Could not load profile (database timeout).")
-                return
-            if not text:
-                await reply_message(
-                    message,
-                    f"❌ No profile found for <@{target_id}> (`{target_id}`).",
-                )
-                return
-            await reply_message(message, text)
+            await reply_message(
+                message,
+                "Usage: `!withdraw <usd_amount> <ltc_address>` *(MM tip balance)*",
+            )
             return
         if message.author.id == config.ADMIN_USER_ID and content.startswith("!add-wager"):
             # Usage: !add-wager <amount> [user_id|@mention]
@@ -372,29 +414,6 @@ async def _handle_message(message: discord.Message):
             except Exception as exc:
                 print(f"[dm] !add-wager failed: {exc}")
                 await reply_message(message, "❌ Could not update wager (database timeout).")
-                return
-            await reply_message(message, text)
-            return
-        if message.author.id == config.ADMIN_USER_ID and content.startswith("!withdraw"):
-            from services import admin_withdraw_usd
-            parts = message.content.strip().split()
-            if len(parts) < 4:
-                await reply_message(
-                    message,
-                    "Usage: `!withdraw <coin> <address> <usd>`\n"
-                    "Examples: `!withdraw ltc LTxxxx… 25`\n"
-                    "`!withdraw usdt@eth 0x… 50`  `!withdraw usdc@bnb 0x… 10`",
-                )
-                return
-            coin, address, usd_raw = parts[1], parts[2], parts[3]
-            try:
-                ok, text = await asyncio.wait_for(
-                    admin_withdraw_usd(coin, address, usd_raw),
-                    timeout=20.0,
-                )
-            except Exception as exc:
-                print(f"[dm] !withdraw failed: {exc}")
-                await reply_message(message, "❌ Withdraw failed (timeout or error).")
                 return
             await reply_message(message, text)
             return

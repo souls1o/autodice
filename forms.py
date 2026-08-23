@@ -61,7 +61,7 @@ COIN_ADDRESS_COMMANDS = {
 TICKET_COMMANDS = frozenset({
     "!ltc", "!eth", "!sol",
     "!restart", "!hold", "!profile", "!rerun", "!cancel",
-    "!clearhold", "!changebet",
+    "!clearhold", "!changebet", "!changeplayer", "!tip", "!withdraw",
 })
 TICKET_CMD_COOLDOWN_SECONDS = 3.0
 _ticket_cmd_cooldown = {}  # (channel_id, user_id) -> monotonic timestamp
@@ -83,11 +83,12 @@ def build_dm_gamemodes_text():
     return DM_GAMEMODES_TEXT
 
 
-def build_dm_help_text(user_id):
+def build_dm_help_text(user_id, *, is_mm=False):
     lines = [
         "**📖 Commands**",
         "`!help` — show this list",
-        "`!profile` — wagered, profit, level, rakeback & fair edge",
+        "`!profile` [user_id] — your stats, or another user's (rakeback hidden unless yours/admin)",
+        "`!ticket <channel_id>` — games / wagered / profit for a ticket",
         "`!gamemodes` — dice & coinflip gamemode info",
         "`!lb` / `!leaderboard` [t/w/m] — top & bottom profit, top wagered",
         "`!housebal` / `!hb` — house balance in USD",
@@ -95,20 +96,26 @@ def build_dm_help_text(user_id):
         "**🎫 Ticket commands**",
         "`!ltc` / `!eth` / `!sol` — get a deposit address",
         "`!hold` — show current winnings for this ticket",
-        "`!profile` — wagered, profit, level, rakeback & fair edge",
+        "`!profile` [user_id] — wagered, profit, level & perks",
         "`!rerun` — rerun with a new bet amount",
         "`!changebet <usd>` — change bet before a game starts",
+        "`!changeplayer <user_id>` — transfer ticket before answering the form",
         "`!clearhold 1|2` — clear self or player hold",
         "`!restart` — restart the bet form (only before funds are sent)",
         "`!cancel` — cancel and payout winnings if any",
     ]
+    if is_mm:
+        lines.extend([
+            "",
+            "**💰 MM**",
+            "`!tip` — view tip balance (1% of house winnings per game)",
+            "`!withdraw <usd> <ltc_address>` — withdraw tip balance",
+        ])
     if user_id == config.ADMIN_USER_ID:
         lines.extend([
             "",
             "**🔧 Admin**",
             "`!stats` — wagered, profit, games, and house balance",
-            "`!ticket <channel_id>` — games / wagered / profit for a ticket",
-            "`!lookup <user_id>` — view a user's profile stats",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
             "`!withdraw <coin> <address> <usd>` — Apirone send (`btc`/`eth`/`ltc`/`usdt@eth`/…)",
             "`!wallet` — wallet addresses",
@@ -626,11 +633,14 @@ async def handle_ticket_command(message, bot_user, bot=None):
     if cmd == "!changebet":
         await handle_changebet_command(message, bot_user)
         return True
+    if cmd == "!changeplayer":
+        await handle_changeplayer_command(message, bot_user)
+        return True
     if cmd == "!clearhold":
         await handle_clearhold_command(message, bot_user)
         return True
 
-    if content not in TICKET_COMMANDS:
+    if content not in TICKET_COMMANDS and cmd not in TICKET_COMMANDS:
         return False
 
     key = (message.channel.id, message.author.id)
@@ -664,20 +674,71 @@ async def handle_ticket_command(message, bot_user, bot=None):
         await handle_hold_command(message, bot_user)
         return True
 
-    if content == "!profile":
-        from users import build_profile_text
+    if cmd == "!profile":
+        from users import resolve_profile_command
+        parts = message.content.strip().split(maxsplit=1)
+        raw_args = parts[1] if len(parts) > 1 else None
         try:
-            text = await asyncio.wait_for(
-                build_profile_text(message.author.id),
+            text, err = await asyncio.wait_for(
+                resolve_profile_command(
+                    message.author.id,
+                    raw_args,
+                    mentions=message.mentions,
+                ),
                 timeout=8.0,
             )
-            await send_channel(message.channel, text)
         except Exception as exc:
             print(f"[ticket] !profile failed for {message.author.id}: {exc}")
             await send_channel(
                 message.channel,
                 "❌ Could not load profile (database timeout). Try again in a moment.",
             )
+            return True
+        if err:
+            await send_channel(message.channel, err)
+            return True
+        await send_channel(message.channel, text)
+        return True
+
+    if cmd == "!tip":
+        from users import build_tip_text, user_has_mm_role
+        if not bot or not await user_has_mm_role(bot, message.author.id):
+            await send_channel(message.channel, "❌ MM only command.")
+            return True
+        try:
+            text = await asyncio.wait_for(
+                build_tip_text(message.author.id),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            print(f"[ticket] !tip failed for {message.author.id}: {exc}")
+            await send_channel(message.channel, "❌ Could not load tip balance.")
+            return True
+        await send_channel(message.channel, text)
+        return True
+
+    if cmd == "!withdraw":
+        from users import mm_withdraw_tip, user_has_mm_role
+        if not bot or not await user_has_mm_role(bot, message.author.id):
+            await send_channel(message.channel, "❌ MM only command.")
+            return True
+        parts = message.content.strip().split()
+        if len(parts) != 3:
+            await send_channel(
+                message.channel,
+                "Usage: `!withdraw <usd_amount> <ltc_address>`",
+            )
+            return True
+        try:
+            ok, text = await asyncio.wait_for(
+                mm_withdraw_tip(message.author.id, parts[1], parts[2]),
+                timeout=20.0,
+            )
+        except Exception as exc:
+            print(f"[ticket] !withdraw failed for {message.author.id}: {exc}")
+            await send_channel(message.channel, "❌ Withdraw failed (timeout or error).")
+            return True
+        await send_channel(message.channel, text)
         return True
 
     if content == "!rerun":
@@ -772,6 +833,49 @@ async def handle_changebet_command(message, bot_user):
         f"`{format_bet_display(my_bet)}v{format_bet_display(player_bet)}`",
     )
     save_session_from_form(channel.id, form)
+
+
+async def handle_changeplayer_command(message, bot_user):
+    """Transfer ticket ownership — only current player, before any form answer."""
+    from users import attach_user_to_form, parse_discord_user_id
+
+    channel = message.channel
+    form = get_form(channel.id)
+    if not form:
+        await send_channel(channel, "❌ No active ticket.")
+        return
+    if message.author.id != form.get("ticket_user_id"):
+        return
+    if form.get("step", 0) != 0 or form.get("responses"):
+        await send_channel(
+            channel,
+            "❌ Can only change player before answering the first form question.",
+        )
+        return
+    if form.get("game_state") or form.get("game_started"):
+        await send_channel(channel, "❌ Cannot change player after a game has started.")
+        return
+
+    parts = message.content.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await send_channel(channel, "Usage: `!changeplayer <user_id|@mention>`")
+        return
+    try:
+        new_id = parse_discord_user_id(parts[1], mentions=message.mentions)
+    except (TypeError, ValueError):
+        await send_channel(channel, "❌ Invalid user id / mention.")
+        return
+    if new_id == form.get("ticket_user_id"):
+        await send_channel(channel, "❌ That user is already the ticket player.")
+        return
+
+    form["ticket_user_id"] = new_id
+    session = get_ticket_session(channel.id)
+    session["ticket_user_id"] = new_id
+    await attach_user_to_form(form)
+    save_session_from_form(channel.id, form)
+    await send_channel(channel, f"✅ Ticket player set to <@{new_id}>.")
+    await ask_next_step(channel, bot_user)
 
 
 async def handle_rerun_command(message, bot_user, bot=None):

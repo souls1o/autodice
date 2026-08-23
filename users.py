@@ -79,6 +79,7 @@ def _default_user(discord_id):
         "rakeback_pct": rakeback_pct,
         "fair_edge": fair_edge,
         "rakeback_balance": 0.0,
+        "tip_balance": 0.0,
         "level_rewards_claimed": 1,  # rewards paid through this level (1 = none)
         "ticket_commands_sent": False,
         "created_at": now,
@@ -449,7 +450,14 @@ def wagered_until_next_level(wagered, level):
     return max(0.0, round(float(nxt) - float(wagered or 0), 2))
 
 
-async def build_profile_text(discord_id, *, create=True, for_admin_lookup=False):
+async def build_profile_text(
+    discord_id,
+    *,
+    create=True,
+    for_admin_lookup=False,
+    for_other_user=False,
+    show_rakeback=True,
+):
     """
     Build the profile stats message.
     If create=False and the user is missing, returns None.
@@ -481,18 +489,148 @@ async def build_profile_text(discord_id, *, create=True, for_admin_lookup=False)
         level_note = f" *(+{_fmt_money(next_reward)} next level)*"
 
     title = "**👤 Profile**"
-    if for_admin_lookup:
+    if for_admin_lookup or for_other_user:
         title = f"**👤 Profile** — <@{int(discord_id)}> (`{discord_id}`)"
 
-    return "\n".join([
+    lines = [
         title,
         f"Wagered: `{_fmt_money(wagered)}`{wagered_note}",
         f"Profit: `{_fmt_money(user.get('profit', 0))}`",
         f"Level: `{level}/{MAX_LEVEL}`{level_note}",
         f"Rakeback Rate: `{_fmt_pct(rb_pct)}` *(+0.5% each level)*",
         f"Fair House Edge: `{_fmt_pct(fair_edge)}` *(-1% each level)*",
-        f"Rakeback: `{_fmt_money(claimable)}` *($1 minimum claim)*",
+    ]
+    if show_rakeback:
+        lines.append(f"Rakeback: `{_fmt_money(claimable)}` *($1 minimum claim)*")
+    return "\n".join(lines)
+
+
+async def resolve_profile_command(requester_id, raw_args=None, *, mentions=None):
+    """Build profile text for self or optional target user."""
+    import config
+
+    if raw_args:
+        try:
+            target_id = parse_discord_user_id(raw_args, mentions=mentions)
+        except (TypeError, ValueError):
+            return None, "❌ Invalid user id / mention."
+        is_self = int(target_id) == int(requester_id)
+        is_admin = int(requester_id) == config.ADMIN_USER_ID
+        show_rakeback = is_self or is_admin
+        text = await build_profile_text(
+            target_id,
+            create=is_self,
+            show_rakeback=show_rakeback,
+            for_other_user=not is_self,
+        )
+        if not text:
+            return None, f"❌ No profile found for <@{target_id}> (`{target_id}`)."
+        return text, None
+
+    text = await build_profile_text(requester_id, create=True, show_rakeback=True)
+    return text, None
+
+
+async def user_has_mm_role(bot, user_id):
+    """True if user has the MM tip role in the configured guild."""
+    import config
+
+    if not config.GUILD_ID or not bot:
+        return False
+    guild = bot.get_guild(config.GUILD_ID)
+    if guild is None:
+        try:
+            guild = await bot.fetch_guild(config.GUILD_ID)
+        except Exception:
+            return False
+    member = guild.get_member(user_id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(user_id)
+        except Exception:
+            return False
+    return any(r.id == config.MM_TIP_ROLE_ID for r in member.roles)
+
+
+async def credit_mm_tip_for_game(form, self_won):
+    """Credit 1% of house winnings to the MM when self wins."""
+    import config
+
+    if not self_won:
+        return
+    mm_id = form.get("funds_recipient_id") or form.get("game_confirmer_user_id")
+    if not mm_id:
+        return
+
+    from bets import get_bet_info, is_rakeback_bet
+
+    his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
+    win_amount = my_bet_usd if is_rakeback_bet(form) else (my_bet_usd + his_bet_usd)
+    tip = round(float(win_amount) * config.MM_TIP_RATE, 2)
+    if tip <= 0:
+        return
+
+    await users_collection.update_one(
+        {"_id": _user_id(mm_id)},
+        {
+            "$inc": {"tip_balance": tip},
+            "$set": {"updated_at": datetime.utcnow()},
+        },
+        upsert=True,
+    )
+
+
+async def build_tip_text(discord_id):
+    user = await find_user_doc(discord_id)
+    balance = round(float(user.get("tip_balance", 0) if user else 0), 2)
+    return "\n".join([
+        f"**💰 Tip balance:** `{_fmt_money(balance)}`",
+        "*Earn 1% of house winnings on games you MM.*",
+        "Withdraw: `!withdraw <usd> <ltc_address>`",
     ])
+
+
+async def mm_withdraw_tip(discord_id, usd_amount, ltc_address):
+    """Withdraw tip balance to an LTC address. Returns (ok, message)."""
+    try:
+        usd = round(float(usd_amount), 2)
+    except (TypeError, ValueError):
+        return False, "❌ Amount must be a number."
+    if usd <= 0:
+        return False, "❌ Amount must be greater than 0."
+
+    address = (ltc_address or "").strip()
+    if not address:
+        return False, "❌ Missing LTC address."
+
+    uid = _user_id(discord_id)
+    user = await users_collection.find_one({"_id": uid})
+    balance = round(float(user.get("tip_balance", 0) if user else 0), 2)
+    if balance < usd:
+        return False, f"❌ Insufficient tip balance (`{_fmt_money(balance)}` available)."
+
+    result = await users_collection.update_one(
+        {"_id": uid, "tip_balance": {"$gte": usd}},
+        {"$inc": {"tip_balance": -usd}, "$set": {"updated_at": datetime.utcnow()}},
+    )
+    if not result.modified_count:
+        return False, "❌ Insufficient tip balance."
+
+    from services import admin_withdraw_usd
+
+    ok, msg = await admin_withdraw_usd("ltc", address, usd)
+    if not ok:
+        await users_collection.update_one(
+            {"_id": uid},
+            {"$inc": {"tip_balance": usd}, "$set": {"updated_at": datetime.utcnow()}},
+        )
+        return False, msg
+
+    remaining = round(balance - usd, 2)
+    return True, (
+        f"✅ Withdrew **{_fmt_money(usd)}** from tip balance "
+        f"(`{_fmt_money(remaining)}` remaining).\n{msg}"
+    )
 
 
 async def _inc_user_daily(user_id, *, profit=0.0, wagered=0.0):
@@ -640,7 +778,7 @@ def build_mm_ticket_commands_dm():
         "`!usdt-bnb` / `!usdt-eth` — USDT on BSC / ERC-20\n"
         "`!usdc-bnb` / `!usdc-eth` — USDC on BSC / ERC-20\n"
         "`!hold` — show current winnings for this ticket\n"
-        "`!profile` — wagered, profit, level, rakeback & fair edge\n"
+        "`!profile` [user_id] — wagered, profit, level & perks\n"
         "`!rerun` — rerun with a new bet amount\n"
         "`!restart` — restart the bet form (only before funds are sent)\n"
         "`!cancel` — cancel and payout winnings if any"

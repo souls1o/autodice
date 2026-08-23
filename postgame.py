@@ -233,10 +233,16 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
         print(f"[end_game] track_stats failed: {exc}")
 
     try:
-        from users import record_user_profit_on_game_end
+        from users import record_user_profit_on_game_end, credit_mm_tip_for_game
         await record_user_profit_on_game_end(form, self_won)
     except Exception as exc:
         print(f"[end_game] record_user_profit failed: {exc}")
+
+    if self_won:
+        try:
+            await credit_mm_tip_for_game(form, self_won)
+        except Exception as exc:
+            print(f"[end_game] credit_mm_tip failed: {exc}")
 
     try:
         await post_victory_message(channel.guild, form, bot)

@@ -34,10 +34,12 @@ AUTO_POST_INTERVAL = 300
 GAME_LOG_CHANNEL_ID = 1258789286388568134
 VOUCH_CHANNEL_ID = 1258789148702146700
 
-# Staff roles allowed to be recorded as the wager funds recipient
+# Staff roles allowed to be recorded as the wager funds recipient / MM tips
 FUNDS_RECIPIENT_ROLE_IDS = [
     1258727325265297408
 ]
+MM_TIP_ROLE_ID = 1258727325265297408
+MM_TIP_RATE = 0.01  # 1% of house winnings on self win
 
 ROLL_HYPE_MESSAGES = [
     "gg",
