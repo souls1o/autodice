@@ -102,7 +102,7 @@ FORM_QUESTIONS = [
 3. `+1 on Rolls — FT3 → 1.5x | FT5 → 2x Bet`
 4. `1-0 Lead — FT3 → 1.5x | FT2 → 2x Bet`
 5. `Ties — FT3 → 20% | FT5 → 30% HIGHER Bet`
-6. `Fair — {fair_pct}% LOWER Bet`
+6. `Fair — {fair_pct}% LOWER Bet (FT1 / FT3 / FT5)`
 """,
         "mapping": {
             "7s": ["1"],
@@ -119,7 +119,7 @@ FORM_QUESTIONS = [
         "type": "choice",
         "text": """<:Coin:1259259605255720980> **Which gamemode would you like to play?**
 1. `1-0 Lead — FT3 → 1.5x | FT2 → 2x Bet`
-2. `Fair — {fair_pct}% LOWER Bet`
+2. `Fair — {fair_pct}% LOWER Bet (FT1 / FT3 / FT5)`
 """,
         "mapping": {
             "lead": ["1", "lead", "l"],
@@ -146,6 +146,23 @@ FORM_QUESTIONS = [
     {
         "type": "choice",
         "text": """🔢 **First to how many?**
+1. `FT1`
+2. `FT3`
+3. `FT5`
+4. `Random`
+""",
+        "mapping": {
+            "ft1": ["1"],
+            "ft3": ["2"],
+            "ft5": ["3"],
+            "random": ["4"],
+        },
+        "only_for_gamemode": ["fair"],
+        "short_key": "first_to"
+    },
+    {
+        "type": "choice",
+        "text": """🔢 **First to how many?**
 1. `FT3`
 2. `FT5`
 3. `Random`
@@ -156,7 +173,7 @@ FORM_QUESTIONS = [
             "random": ["3"]
         },
         "only_for": ["dice", "coinflip"],
-        "skip_for_gamemode": ["lead", "lead_10"],
+        "skip_for_gamemode": ["lead", "lead_10", "fair"],
         "short_key": "first_to"
     },
     {

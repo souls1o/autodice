@@ -113,7 +113,6 @@ async def record_winnings(channel, form, self_won):
     from bets import (
         add_player_hold_usd,
         add_self_hold_usd,
-        get_self_hold_usd,
         is_rakeback_bet,
         subtract_self_hold_usd,
         sync_legacy_winnings,
@@ -124,11 +123,16 @@ async def record_winnings(channel, form, self_won):
     form["winnings_coin"] = "ltc"
     stake_from_hold = form.pop("stake_from_hold", False)
     if self_won:
+        # Stake already left self hold at confirm when stake_from_hold; credit full pot back.
         amount = my_bet_usd if is_rakeback_bet(form) else (my_bet_usd + his_bet_usd)
         add_self_hold_usd(form, amount)
-    elif not stake_from_hold:
-        subtract_self_hold_usd(form, my_bet_usd)
-        if not is_rakeback_bet(form):
+    else:
+        # Player won — house stake already deducted at confirm if staked from hold.
+        if not stake_from_hold:
+            subtract_self_hold_usd(form, my_bet_usd)
+        if is_rakeback_bet(form):
+            add_player_hold_usd(form, my_bet_usd)
+        else:
             add_player_hold_usd(form, his_bet_usd + my_bet_usd)
     sync_winnings_crypto(form)
     save_session_from_form(channel.id, form)

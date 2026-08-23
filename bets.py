@@ -95,14 +95,10 @@ def get_max_bet(form):
     if gamemode == "lead_10":
         gamemode = "lead"
     first_to = responses.get("first_to")
-    if game == "coinflip":
-        return 200
-    if gamemode == "7s_ties" and first_to == "ft5":
-        return 65
-    if gamemode == "7s_ties" and first_to == "ft3":
+    if gamemode == "7s_ties":
         return 75
-    if (gamemode == "7s" and first_to == "ft3") or (gamemode == "7s" and first_to == "ft5"):
-        return 200
+    if gamemode == "7s":
+        return 150
     if gamemode in ("fair", "ties", "plus1", "lead"):
         return 200
     return 50
@@ -260,6 +256,32 @@ def add_self_hold_usd(form, usd):
 def add_player_hold_usd(form, usd):
     sync_legacy_winnings(form)
     form["player_hold_usd"] = round(form["player_hold_usd"] + float(usd), 8)
+
+
+def subtract_player_hold_usd(form, usd):
+    sync_legacy_winnings(form)
+    deduct = min(float(usd), form["player_hold_usd"])
+    if deduct <= 0:
+        return 0.0
+    form["player_hold_usd"] = round(form["player_hold_usd"] - deduct, 8)
+    return deduct
+
+
+def apply_player_hold_stake(form):
+    """
+    At game start, stake the player's wager from player hold when available.
+    Returns the USD amount deducted. Skipped for rakeback bets.
+    """
+    if is_rakeback_bet(form):
+        form["player_stake_from_hold"] = 0.0
+        return 0.0
+    his_bet_usd, _my_bet, _coin = get_bet_info(form)
+    available = get_player_hold_usd(form)
+    deduct = round(min(available, float(his_bet_usd or 0)), 2)
+    if deduct > 0:
+        deduct = subtract_player_hold_usd(form, deduct)
+    form["player_stake_from_hold"] = deduct
+    return deduct
 
 
 def subtract_self_hold_usd(form, usd):

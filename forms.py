@@ -70,13 +70,13 @@ DM_GAMEMODES_TEXT = """**🎲 Dice Gamemodes**
 1. **I Win ALL 7's** — FT3 → 2x | FT5 → 3x Bet
 2. **I Win ALL 7's & Ties** — FT3 → 3x | FT5 → 3.5x Bet
 3. **I Win Ties** — FT3 → 20% HIGHER | FT5 → 30% HIGHER Bet
-4. **Fair** — 7–10% LOWER Bet (improves with level)
+4. **Fair** — 7–10% LOWER Bet (FT1 / FT3 / FT5, improves with level)
 5. **I Get +1 on Rolls** — FT3 → 1.5x | FT5 → 2x Bet (normal +1 / crazy −1)
 6. **1-0 Lead** — FT3 → 1.5x | FT2 → 2x Bet
 
 **🪙 Coinflip**
 1. **1-0 Lead** — FT3 → 1.5x | FT2 → 2x Bet
-2. **Fair** — 7–10% LOWER Bet (improves with level)"""
+2. **Fair** — 7–10% LOWER Bet (FT1 / FT3 / FT5, improves with level)"""
 
 
 def build_dm_gamemodes_text():
@@ -1051,8 +1051,6 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             form["game_confirmer_user_id"] = message.author.id
             await reply_message(message, "conf")
             form["waiting_for_adder_confirm"] = True
-            mm_id = form.get("funds_recipient_id") or message.author.id
-            await send_channel(message.channel, f"<@{mm_id}>")
             if form.get("player_conf_pending"):
                 form["waiting_for_confirm"] = False
                 form["waiting_for_adder_confirm"] = False

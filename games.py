@@ -789,6 +789,10 @@ async def start_game(channel, form, bot_user, bot=None):
             await payout_winnings_if_any(channel, form)
             return
 
+    from bets import apply_player_hold_stake
+    apply_player_hold_stake(form)
+    save_session_from_form(channel.id, form)
+
     await record_user_wager_on_game_start(form)
     form["game_started"] = True
     form["ticket_channel_id"] = channel.id
