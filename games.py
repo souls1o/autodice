@@ -774,6 +774,13 @@ async def start_game(channel, form, bot_user, bot=None):
     )
     from message_queue import send_channel
 
+    if not form.get("player_confirmed"):
+        print(f"[start_game] blocked — player has not confirmed in #{getattr(channel, 'name', channel.id)}")
+        form["waiting_for_adder_confirm"] = True
+        form["waiting_for_confirm"] = False
+        return
+    form.pop("player_confirmed", None)
+
     # Debit rakeback before hold; refund if hold apply fails.
     ok, err, rb_debited = await debit_rakeback_stake_for_form(form)
     if not ok:

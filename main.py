@@ -244,7 +244,7 @@ async def _handle_message(message: discord.Message):
 
         if content == "!help":
             from users import user_has_mm_role
-            is_mm = await user_has_mm_role(bot, message.author.id)
+            is_mm = await user_has_mm_role(bot, message.author.id, member=message.author)
             await reply_message(message, build_dm_help_text(message.author.id, is_mm=is_mm))
             return
         if content.startswith("!profile"):
@@ -274,7 +274,7 @@ async def _handle_message(message: discord.Message):
             return
         if content == "!tip":
             from users import build_tip_text, user_has_mm_role
-            if not await user_has_mm_role(bot, message.author.id):
+            if not await user_has_mm_role(bot, message.author.id, member=message.author):
                 await reply_message(message, "❌ MM only command.")
                 return
             try:
@@ -375,7 +375,7 @@ async def _handle_message(message: discord.Message):
                     is_numeric_amount = True
                 except ValueError:
                     is_numeric_amount = False
-                if is_numeric_amount and await user_has_mm_role(bot, message.author.id):
+                if is_numeric_amount and await user_has_mm_role(bot, message.author.id, member=message.author):
                     try:
                         ok, text = await asyncio.wait_for(
                             mm_withdraw_tip(message.author.id, parts[1], parts[2]),

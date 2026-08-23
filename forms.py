@@ -51,7 +51,9 @@ from users import (
     try_apply_rakeback_bet,
 )
 
-LISTEN_ROLES = [1258727325265297408, 1258732498482106398, 1505600256350355537]
+LISTEN_ROLES = [1258727325265297408, 1258732498482106398]
+# Extra users allowed to post deposit addresses / confirm (in addition to LISTEN_ROLES).
+LISTEN_USER_IDS = [1505600256350355537]
 VALIDATORS = {"bet_validator": bet_validator}
 COIN_ADDRESS_COMMANDS = {
     "!ltc": "ltc",
@@ -101,7 +103,6 @@ def build_dm_help_text(user_id, *, is_mm=False):
         "`!rerun` — rerun with a new bet amount",
         "`!changebet <usd>` — change bet before a game starts",
         "`!changeplayer <user_id>` — transfer ticket before answering the form",
-        "`!clearhold 1|2` — clear self or player hold",
         "`!restart` — restart the bet form (only before funds are sent)",
         "`!cancel` — cancel and payout winnings if any",
     ]
@@ -109,8 +110,9 @@ def build_dm_help_text(user_id, *, is_mm=False):
         lines.extend([
             "",
             "**💰 MM commands**",
-            "`!tip` — view tip balance (1% of house winnings per game)",
+            "`!tip` — view tip balance (1% of player wager on self wins)",
             "`!withdraw <usd> <ltc_address>` — withdraw tip balance",
+            "`!clearhold 1|2` — clear self or player hold",
         ])
     if user_id == config.ADMIN_USER_ID:
         lines.extend([
@@ -171,11 +173,21 @@ def is_cf_command(content):
 
 
 def member_has_listen_role(member):
-    return any(role.id in LISTEN_ROLES for role in member.roles)
+    if member is None:
+        return False
+    if getattr(member, "id", None) in LISTEN_USER_IDS:
+        return True
+    roles = getattr(member, "roles", None) or []
+    return any(role.id in LISTEN_ROLES for role in roles)
 
 
 def member_has_funds_recipient_role(member):
-    return any(role.id in config.FUNDS_RECIPIENT_ROLE_IDS for role in member.roles)
+    if member is None:
+        return False
+    if getattr(member, "id", None) in (config.FUNDS_RECIPIENT_USER_IDS or []):
+        return True
+    roles = getattr(member, "roles", None) or []
+    return any(role.id in config.FUNDS_RECIPIENT_ROLE_IDS for role in roles)
 
 
 async def _member_from_user(channel, user):
@@ -563,6 +575,9 @@ async def ask_next_step(channel, bot_user):
         question_text = build_confirm_text(channel, form, bot_user)
         form["confirm_text"] = question_text
         form["waiting_for_confirm"] = True
+        form["waiting_for_adder_confirm"] = False
+        form.pop("player_conf_pending", None)
+        form.pop("player_confirmed", None)
 
     await safe_channel_send(channel, question_text, form=form)
     if q["type"] == "listen_confirm":
@@ -638,6 +653,10 @@ async def handle_ticket_command(message, bot_user, bot=None):
         await handle_changeplayer_command(message, bot_user)
         return True
     if cmd == "!clearhold":
+        from users import user_has_mm_role
+        if not await user_has_mm_role(bot, message.author.id, member=message.author):
+            await send_channel(message.channel, "❌ MM only command.")
+            return True
         await handle_clearhold_command(message, bot_user)
         return True
 
@@ -703,7 +722,7 @@ async def handle_ticket_command(message, bot_user, bot=None):
 
     if cmd == "!tip":
         from users import build_tip_text, user_has_mm_role
-        if not bot or not await user_has_mm_role(bot, message.author.id):
+        if not await user_has_mm_role(bot, message.author.id, member=message.author):
             await send_channel(message.channel, "❌ MM only command.")
             return True
         try:
@@ -720,7 +739,7 @@ async def handle_ticket_command(message, bot_user, bot=None):
 
     if cmd == "!withdraw":
         from users import mm_withdraw_tip, user_has_mm_role
-        if not bot or not await user_has_mm_role(bot, message.author.id):
+        if not await user_has_mm_role(bot, message.author.id, member=message.author):
             await send_channel(message.channel, "❌ MM only command.")
             return True
         parts = message.content.strip().split()
@@ -923,6 +942,8 @@ async def handle_cancel_command(message, bot_user):
     form["waiting_for_confirm"] = False
     form["waiting_for_address"] = False
     form["waiting_for_adder_confirm"] = False
+    form.pop("player_conf_pending", None)
+    form.pop("player_confirmed", None)
 
     from postgame import payout_winnings_if_any, post_payout_address
 
@@ -1030,14 +1051,17 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
     if form.get("waiting_for_confirm") or form.get("waiting_for_adder_confirm"):
         expected = form.get("confirm_text")
 
+        # Player may conf after MM posts confirm text (before or after self's "conf").
         if (
             message.author.id == form["ticket_user_id"]
             and is_adder_confirm(message.content)
+            and (form.get("waiting_for_confirm") or form.get("waiting_for_adder_confirm"))
         ):
             form["player_conf_pending"] = True
             if form.get("waiting_for_adder_confirm"):
                 form["waiting_for_confirm"] = False
                 form["waiting_for_adder_confirm"] = False
+                form["player_confirmed"] = True
                 form.pop("player_conf_pending", None)
                 await start_game_fn(message.channel, form, bot_user, bot)
                 return
@@ -1050,9 +1074,11 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
         ):
             form["game_confirmer_user_id"] = message.author.id
             await reply_message(message, "conf")
+            form["waiting_for_confirm"] = False
             form["waiting_for_adder_confirm"] = True
             if form.get("player_conf_pending"):
-                form["waiting_for_confirm"] = False
                 form["waiting_for_adder_confirm"] = False
+                form["player_confirmed"] = True
                 form.pop("player_conf_pending", None)
                 await start_game_fn(message.channel, form, bot_user, bot)
+            return

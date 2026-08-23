@@ -351,6 +351,8 @@ async def finalize_rerun(channel, form, bot_user):
     form["pending_rerun_fund"] = True
     form["waiting_for_confirm"] = True
     form["waiting_for_adder_confirm"] = False
+    form.pop("player_conf_pending", None)
+    form.pop("player_confirmed", None)
     form["confirm_text"] = build_confirm_text(channel, form, bot_user)
     await send_channel(channel, form["confirm_text"])
     save_session_from_form(channel.id, form)

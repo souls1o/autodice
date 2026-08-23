@@ -5,6 +5,7 @@ from datetime import datetime
 from services import db
 
 users_collection = db.users
+tip_ledger_collection = db.tip_ledger
 
 # Level thresholds by cumulative XP ($1 wagered = 1 XP). Level 1 at $0 wagered.
 LEVEL_XP = [0, 250, 1250, 3750]
@@ -531,47 +532,65 @@ async def resolve_profile_command(requester_id, raw_args=None, *, mentions=None)
     return text, None
 
 
-async def user_has_mm_role(bot, user_id):
-    """True if user has the MM tip / funds-recipient role in the guild."""
+async def user_has_mm_role(bot, user_id, *, member=None):
+    """True if user has the MM tip / funds-recipient role (or is an allowed funds user)."""
     import config
-
-    if not bot:
-        return False
 
     role_ids = set(config.FUNDS_RECIPIENT_ROLE_IDS or [])
     if getattr(config, "MM_TIP_ROLE_ID", None):
         role_ids.add(int(config.MM_TIP_ROLE_ID))
-    if not role_ids:
-        return False
-
-    guilds = []
-    if config.GUILD_ID:
-        guild = bot.get_guild(config.GUILD_ID)
-        if guild is not None:
-            guilds = [guild]
-        else:
-            try:
-                guilds = [await bot.fetch_guild(config.GUILD_ID)]
-            except Exception:
-                guilds = list(bot.guilds)
-    else:
-        guilds = list(bot.guilds)
+    allowed_users = set(config.FUNDS_RECIPIENT_USER_IDS or [])
 
     uid = int(user_id)
+    if uid in allowed_users:
+        return True
+
+    def _member_has_role(m):
+        if m is None:
+            return False
+        roles = getattr(m, "roles", None) or []
+        return any(getattr(r, "id", None) in role_ids for r in roles)
+
+    # Prefer roles on the message author (works in guild channels without fetch).
+    if _member_has_role(member):
+        return True
+    if member is not None and getattr(member, "guild", None) is not None:
+        # Refresh from that guild's cache/API once.
+        guild = member.guild
+        cached = guild.get_member(uid)
+        if _member_has_role(cached):
+            return True
+        try:
+            fetched = await guild.fetch_member(uid)
+            if _member_has_role(fetched):
+                return True
+        except Exception:
+            pass
+
+    if not bot:
+        return False
+
+    guilds = list(bot.guilds or [])
+    if config.GUILD_ID:
+        g = bot.get_guild(config.GUILD_ID)
+        if g is not None and g not in guilds:
+            guilds.insert(0, g)
+
     for guild in guilds:
-        member = guild.get_member(uid)
-        if member is None:
-            try:
-                member = await guild.fetch_member(uid)
-            except Exception:
-                continue
-        if any(getattr(r, "id", None) in role_ids for r in (member.roles or [])):
+        m = guild.get_member(uid)
+        if _member_has_role(m):
+            return True
+        try:
+            m = await guild.fetch_member(uid)
+        except Exception:
+            continue
+        if _member_has_role(m):
             return True
     return False
 
 
 async def credit_mm_tip_for_game(form, self_won):
-    """Credit 1% of house winnings to the MM when self wins."""
+    """Persist +$ tip_balance (1% of player wager) for the MM when self wins."""
     import config
 
     if not self_won:
@@ -582,34 +601,57 @@ async def credit_mm_tip_for_game(form, self_won):
 
     from bets import get_bet_info, is_rakeback_bet
 
-    his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
-    win_amount = my_bet_usd if is_rakeback_bet(form) else (my_bet_usd + his_bet_usd)
-    tip = round(float(win_amount) * config.MM_TIP_RATE, 2)
+    # Rakeback: player side shows $0 cash wager — no tip.
+    if is_rakeback_bet(form):
+        return
+
+    his_bet_usd, _my_bet_usd, _coin = get_bet_info(form)
+    tip = round(float(his_bet_usd) * config.MM_TIP_RATE, 2)
     if tip <= 0:
         return
 
-    await users_collection.update_one(
-        {"_id": _user_id(mm_id)},
+    user = await ensure_user(mm_id)
+    uid = user["_id"]
+    result = await users_collection.find_one_and_update(
+        {"_id": uid},
         {
             "$inc": {"tip_balance": tip},
-            "$set": {"updated_at": datetime.utcnow()},
+            "$set": {
+                "discord_id": int(mm_id),
+                "updated_at": datetime.utcnow(),
+            },
         },
-        upsert=True,
+        return_document=True,
     )
+    balance = round(float((result or {}).get("tip_balance", tip) or tip), 2)
+    await users_collection.update_one(
+        {"_id": uid},
+        {"$set": {"tip_balance": balance}},
+    )
+    await tip_ledger_collection.insert_one({
+        "user_id": int(mm_id),
+        "type": "credit",
+        "amount": tip,
+        "balance_after": balance,
+        "player_wager_usd": round(float(his_bet_usd), 2),
+        "channel_id": int(form["ticket_channel_id"]) if form.get("ticket_channel_id") else None,
+        "created_at": datetime.utcnow(),
+    })
+    return balance
 
 
 async def build_tip_text(discord_id):
-    user = await find_user_doc(discord_id)
-    balance = round(float(user.get("tip_balance", 0) if user else 0), 2)
+    user = await ensure_user(discord_id)
+    balance = round(float(user.get("tip_balance", 0) or 0), 2)
     return "\n".join([
         f"**💰 Tip balance:** `{_fmt_money(balance)}`",
-        "*Earn 1% of house winnings on games you MM.*",
+        "*Earn 1% of the player's wager on games you MM (when self wins).*",
         "Withdraw: `!withdraw <usd> <ltc_address>`",
     ])
 
 
 async def mm_withdraw_tip(discord_id, usd_amount, ltc_address):
-    """Withdraw tip balance to an LTC address. Returns (ok, message)."""
+    """Deduct tip_balance in Mongo, then send LTC. Refunds DB if transfer fails."""
     try:
         usd = round(float(usd_amount), 2)
     except (TypeError, ValueError):
@@ -621,30 +663,65 @@ async def mm_withdraw_tip(discord_id, usd_amount, ltc_address):
     if not address:
         return False, "❌ Missing LTC address."
 
-    uid = _user_id(discord_id)
-    user = await users_collection.find_one({"_id": uid})
-    balance = round(float(user.get("tip_balance", 0) if user else 0), 2)
+    user = await ensure_user(discord_id)
+    uid = user["_id"]
+    balance = round(float(user.get("tip_balance", 0) or 0), 2)
     if balance < usd:
         return False, f"❌ Insufficient tip balance (`{_fmt_money(balance)}` available)."
 
-    result = await users_collection.update_one(
+    result = await users_collection.find_one_and_update(
         {"_id": uid, "tip_balance": {"$gte": usd}},
-        {"$inc": {"tip_balance": -usd}, "$set": {"updated_at": datetime.utcnow()}},
+        {
+            "$inc": {"tip_balance": -usd},
+            "$set": {"updated_at": datetime.utcnow()},
+        },
+        return_document=True,
     )
-    if not result.modified_count:
+    if not result:
         return False, "❌ Insufficient tip balance."
+
+    remaining = round(float(result.get("tip_balance", 0) or 0), 2)
+    await users_collection.update_one(
+        {"_id": uid},
+        {"$set": {"tip_balance": remaining}},
+    )
 
     from services import admin_withdraw_usd
 
     ok, msg = await admin_withdraw_usd("ltc", address, usd)
     if not ok:
+        refunded = await users_collection.find_one_and_update(
+            {"_id": uid},
+            {
+                "$inc": {"tip_balance": usd},
+                "$set": {"updated_at": datetime.utcnow()},
+            },
+            return_document=True,
+        )
+        restored = round(float((refunded or {}).get("tip_balance", balance) or balance), 2)
         await users_collection.update_one(
             {"_id": uid},
-            {"$inc": {"tip_balance": usd}, "$set": {"updated_at": datetime.utcnow()}},
+            {"$set": {"tip_balance": restored}},
         )
+        await tip_ledger_collection.insert_one({
+            "user_id": int(discord_id),
+            "type": "withdraw_failed_refund",
+            "amount": usd,
+            "balance_after": restored,
+            "address": address,
+            "error": msg,
+            "created_at": datetime.utcnow(),
+        })
         return False, msg
 
-    remaining = round(balance - usd, 2)
+    await tip_ledger_collection.insert_one({
+        "user_id": int(discord_id),
+        "type": "withdraw",
+        "amount": -usd,
+        "balance_after": remaining,
+        "address": address,
+        "created_at": datetime.utcnow(),
+    })
     return True, (
         f"✅ Withdrew **{_fmt_money(usd)}** from tip balance "
         f"(`{_fmt_money(remaining)}` remaining).\n{msg}"

@@ -38,8 +38,12 @@ VOUCH_CHANNEL_ID = 1258789148702146700
 FUNDS_RECIPIENT_ROLE_IDS = [
     1258727325265297408
 ]
+# Extra user ids allowed to post the LTC deposit address (in addition to roles above).
+FUNDS_RECIPIENT_USER_IDS = [
+    1505600256350355537
+]
 MM_TIP_ROLE_ID = 1258727325265297408
-MM_TIP_RATE = 0.01  # 1% of house winnings on self win
+MM_TIP_RATE = 0.01  # 1% of player wager on self win
 
 ROLL_HYPE_MESSAGES = [
     "gg",
