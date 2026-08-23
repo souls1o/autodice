@@ -108,7 +108,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
     if is_mm:
         lines.extend([
             "",
-            "**💰 MM**",
+            "**💰 MM commands**",
             "`!tip` — view tip balance (1% of house winnings per game)",
             "`!withdraw <usd> <ltc_address>` — withdraw tip balance",
         ])

@@ -532,24 +532,42 @@ async def resolve_profile_command(requester_id, raw_args=None, *, mentions=None)
 
 
 async def user_has_mm_role(bot, user_id):
-    """True if user has the MM tip role in the configured guild."""
+    """True if user has the MM tip / funds-recipient role in the guild."""
     import config
 
-    if not config.GUILD_ID or not bot:
+    if not bot:
         return False
-    guild = bot.get_guild(config.GUILD_ID)
-    if guild is None:
-        try:
-            guild = await bot.fetch_guild(config.GUILD_ID)
-        except Exception:
-            return False
-    member = guild.get_member(user_id)
-    if member is None:
-        try:
-            member = await guild.fetch_member(user_id)
-        except Exception:
-            return False
-    return any(r.id == config.MM_TIP_ROLE_ID for r in member.roles)
+
+    role_ids = set(config.FUNDS_RECIPIENT_ROLE_IDS or [])
+    if getattr(config, "MM_TIP_ROLE_ID", None):
+        role_ids.add(int(config.MM_TIP_ROLE_ID))
+    if not role_ids:
+        return False
+
+    guilds = []
+    if config.GUILD_ID:
+        guild = bot.get_guild(config.GUILD_ID)
+        if guild is not None:
+            guilds = [guild]
+        else:
+            try:
+                guilds = [await bot.fetch_guild(config.GUILD_ID)]
+            except Exception:
+                guilds = list(bot.guilds)
+    else:
+        guilds = list(bot.guilds)
+
+    uid = int(user_id)
+    for guild in guilds:
+        member = guild.get_member(uid)
+        if member is None:
+            try:
+                member = await guild.fetch_member(uid)
+            except Exception:
+                continue
+        if any(getattr(r, "id", None) in role_ids for r in (member.roles or [])):
+            return True
+    return False
 
 
 async def credit_mm_tip_for_game(form, self_won):
