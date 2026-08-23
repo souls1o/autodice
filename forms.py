@@ -111,7 +111,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "",
             "**💰 MM commands**",
             "`!tip` — view tip balance (1% of player wager on self wins)",
-            "`!withdraw <usd> <ltc_address>` — withdraw tip balance",
+            "`!withdraw <usd|all> <ltc_address>` — withdraw tip balance",
             "`!clearhold 1|2` — clear self or player hold",
         ])
     if user_id == config.ADMIN_USER_ID:
@@ -746,7 +746,7 @@ async def handle_ticket_command(message, bot_user, bot=None):
         if len(parts) != 3:
             await send_channel(
                 message.channel,
-                "Usage: `!withdraw <usd_amount> <ltc_address>`",
+                "Usage: `!withdraw <usd_amount|all> <ltc_address>`",
             )
             return True
         try:

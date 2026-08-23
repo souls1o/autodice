@@ -647,19 +647,14 @@ async def build_tip_text(discord_id):
     return "\n".join([
         f"**💰 Tip balance:** `{_fmt_money(balance)}`",
         f"**💸 Total Received:** `{_fmt_money(total_tips_received)}`",
-        "Withdraw: `!withdraw <usd> <ltc_address>`",
+        "Withdraw: `!withdraw <usd|all> <ltc_address>`",
     ])
 
 
 async def mm_withdraw_tip(discord_id, usd_amount, ltc_address):
-    """Deduct tip_balance in Mongo, then send LTC. Refunds DB if transfer fails."""
-    try:
-        usd = round(float(usd_amount), 2)
-    except (TypeError, ValueError):
-        return False, "❌ Amount must be a number."
-    if usd <= 0:
-        return False, "❌ Amount must be greater than 0."
-
+    """Deduct tip_balance in Mongo, then send LTC. Refunds DB if transfer fails.
+    Pass usd_amount as 'all' to withdraw the full tip balance.
+    """
     address = (ltc_address or "").strip()
     if not address:
         return False, "❌ Missing LTC address."
@@ -667,6 +662,19 @@ async def mm_withdraw_tip(discord_id, usd_amount, ltc_address):
     user = await ensure_user(discord_id)
     uid = user["_id"]
     balance = round(float(user.get("tip_balance", 0) or 0), 2)
+
+    raw = str(usd_amount or "").strip().lower()
+    if raw == "all":
+        usd = balance
+    else:
+        try:
+            usd = round(float(usd_amount), 2)
+        except (TypeError, ValueError):
+            return False, "❌ Amount must be a number or `all`."
+    if usd <= 0:
+        if raw == "all":
+            return False, "❌ Tip balance is `$0.00` — nothing to withdraw."
+        return False, "❌ Amount must be greater than 0."
     if balance < usd:
         return False, f"❌ Insufficient tip balance (`{_fmt_money(balance)}` available)."
 

@@ -372,10 +372,10 @@ async def _handle_message(message: discord.Message):
                 from users import mm_withdraw_tip, user_has_mm_role
                 try:
                     float(parts[1])
-                    is_numeric_amount = True
+                    is_tip_amount = True
                 except ValueError:
-                    is_numeric_amount = False
-                if is_numeric_amount and await user_has_mm_role(bot, message.author.id, member=message.author):
+                    is_tip_amount = parts[1].strip().lower() == "all"
+                if is_tip_amount and await user_has_mm_role(bot, message.author.id, member=message.author):
                     try:
                         ok, text = await asyncio.wait_for(
                             mm_withdraw_tip(message.author.id, parts[1], parts[2]),
@@ -411,7 +411,7 @@ async def _handle_message(message: discord.Message):
                 return
             await reply_message(
                 message,
-                "Usage: `!withdraw <usd_amount> <ltc_address>` *(MM tip balance)*",
+                "Usage: `!withdraw <usd_amount|all> <ltc_address>` *(MM tip balance)*",
             )
             return
         if message.author.id == config.ADMIN_USER_ID and content.startswith("!add-wager"):
