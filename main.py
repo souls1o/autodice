@@ -16,7 +16,7 @@ from forms import (
     start_ticket_form,
     was_bot_added_to_channel,
 )
-from games import DA_HOOD_BOT_ID, handle_da_hood_message, handle_user_roll, note_mm_cf_command, start_game
+from games import DA_HOOD_BOT_ID, after_cf_command_registered, handle_da_hood_message, handle_user_roll, note_mm_cf_command, start_game
 from message_queue import reply_message, send_channel, start_send_worker
 from services import get_house_balance_text, build_stats_text, build_ticket_stats_text, build_history_text, get_wallets
 from state import (
@@ -520,7 +520,8 @@ async def _handle_message(message: discord.Message):
         state = form["game_state"]
         if state.get("game_type") == "coinflip":
             if is_cf_command(message.content):
-                note_mm_cf_command(message, form)
+                if note_mm_cf_command(message, form):
+                    await after_cf_command_registered(message.channel, form, bot.user, bot)
                 return
             if message.embeds and (
                 state.get("waiting_for_embed") or state.get("pending_cf_cmd_id")

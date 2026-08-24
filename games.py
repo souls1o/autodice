@@ -66,6 +66,15 @@ def _is_cf_mm(form, author):
     return member_has_listen_role(author)
 
 
+def _register_cf_command(state, cmd_id):
+    if cmd_id in state.get("consumed_cf_cmd_ids", set()):
+        return False
+    state["pending_cf_cmd_id"] = cmd_id
+    state["waiting_for_embed"] = True
+    state.pop("queued_cf_cmd_id", None)
+    return True
+
+
 def note_mm_cf_command(message, form):
     """Record MM -cf so the following Heads/Tails embed can be matched to it."""
     state = form.get("game_state") or {}
@@ -75,15 +84,51 @@ def note_mm_cf_command(message, form):
         return False
     if not _is_cf_mm(form, message.author):
         return False
-    if state.get("scoring"):
-        return False
-    if state.get("pending_cf_cmd_id"):
-        return True
     if message.id in state.get("consumed_cf_cmd_ids", set()):
         return True
-    state["pending_cf_cmd_id"] = message.id
-    state["waiting_for_embed"] = True
-    return True
+    if state.get("scoring"):
+        # MM sent -cf while the previous embed is still being scored — queue it.
+        state["queued_cf_cmd_id"] = message.id
+        return True
+    if state.get("pending_cf_cmd_id"):
+        return True
+    return _register_cf_command(state, message.id)
+
+
+async def after_cf_command_registered(channel, form, bot_user, bot):
+    """Match a CF embed that arrived before -cf, or right after a queued -cf."""
+    state = form.get("game_state") or {}
+    pending_id = state.get("pending_cf_cmd_id")
+    if not pending_id:
+        return
+
+    orphans = list(state.get("orphan_cf_embed_ids") or [])
+    for embed_id in orphans:
+        try:
+            msg = await channel.fetch_message(embed_id)
+        except Exception:
+            state.setdefault("orphan_cf_embed_ids", set()).discard(embed_id)
+            continue
+        if msg.id in state.get("consumed_embed_ids", set()):
+            state.setdefault("orphan_cf_embed_ids", set()).discard(embed_id)
+            continue
+        cmd = await _resolve_cf_command(msg)
+        if cmd and cmd.id == pending_id:
+            await handle_coinflip_embed(msg, form, bot_user, bot)
+            return
+
+    try:
+        cmd_msg = await channel.fetch_message(pending_id)
+    except Exception:
+        return
+    consumed = state.get("consumed_embed_ids", set())
+    async for msg in channel.history(limit=10, after=cmd_msg):
+        if msg.id in consumed:
+            continue
+        if not parse_cf_flip(msg):
+            continue
+        await handle_coinflip_embed(msg, form, bot_user, bot)
+        return
 
 
 def _cf_embed_text(message):
@@ -708,6 +753,8 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
     """
     state = form["game_state"]
     if state.get("scoring"):
+        if parse_cf_flip(message) and message.id not in state.get("consumed_embed_ids", set()):
+            state.setdefault("orphan_cf_embed_ids", set()).add(message.id)
         return
     if not state.get("waiting_for_embed"):
         return
@@ -720,6 +767,11 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
     if not flip:
         return
 
+    pending = state.get("pending_cf_cmd_id")
+    if not pending:
+        state.setdefault("orphan_cf_embed_ids", set()).add(message.id)
+        return
+
     cmd = await _resolve_cf_command(message)
     if not cmd:
         return
@@ -727,12 +779,11 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
         return
     if not _is_cf_mm(form, cmd.author):
         return
-
-    pending = state.get("pending_cf_cmd_id")
-    if not pending or cmd.id != pending:
+    if cmd.id != pending:
         return
 
     consumed.add(message.id)
+    state.setdefault("orphan_cf_embed_ids", set()).discard(message.id)
     consumed_cmds.add(cmd.id)
     state.pop("pending_cf_cmd_id", None)
     state["scoring"] = True
@@ -756,6 +807,13 @@ async def handle_coinflip_embed(message, form, bot_user, bot):
         if form.get("game_state") is state:
             state["scoring"] = False
             state["waiting_for_embed"] = True
+            queued = state.pop("queued_cf_cmd_id", None)
+            if queued and not state.get("pending_cf_cmd_id"):
+                _register_cf_command(state, queued)
+                if bot:
+                    asyncio.create_task(
+                        after_cf_command_registered(message.channel, form, bot_user, bot)
+                    )
 
 
 async def handle_da_hood_message(message, form, bot_user, bot):
