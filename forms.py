@@ -576,6 +576,7 @@ async def ask_next_step(channel, bot_user):
         form["confirm_text"] = question_text
         form["waiting_for_confirm"] = True
         form["waiting_for_adder_confirm"] = False
+        form["mm_confirm_sent"] = False
         form.pop("player_conf_pending", None)
         form.pop("player_confirmed", None)
 
@@ -942,6 +943,7 @@ async def handle_cancel_command(message, bot_user):
     form["waiting_for_confirm"] = False
     form["waiting_for_address"] = False
     form["waiting_for_adder_confirm"] = False
+    form["mm_confirm_sent"] = False
     form.pop("player_conf_pending", None)
     form.pop("player_confirmed", None)
 
@@ -1048,18 +1050,17 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             form["step"] += 1
             await ask_next_step(message.channel, bot_user)
 
-    if form.get("waiting_for_confirm") or form.get("waiting_for_adder_confirm"):
+    if form.get("waiting_for_confirm") or form.get("waiting_for_adder_confirm") or form.get("mm_confirm_sent"):
         expected = form.get("confirm_text")
 
-        # Player may conf after MM posts confirm text (before or after self's "conf").
+        # Player conf — only after MM pasted the matching confirm message.
         if (
             message.author.id == form["ticket_user_id"]
             and is_adder_confirm(message.content)
-            and (form.get("waiting_for_confirm") or form.get("waiting_for_adder_confirm"))
+            and form.get("mm_confirm_sent")
         ):
             form["player_conf_pending"] = True
             if form.get("waiting_for_adder_confirm"):
-                form["waiting_for_confirm"] = False
                 form["waiting_for_adder_confirm"] = False
                 form["player_confirmed"] = True
                 form.pop("player_conf_pending", None)
@@ -1073,6 +1074,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             and member_has_listen_role(message.author)
         ):
             form["game_confirmer_user_id"] = message.author.id
+            form["mm_confirm_sent"] = True
             await reply_message(message, "conf")
             form["waiting_for_confirm"] = False
             form["waiting_for_adder_confirm"] = True
