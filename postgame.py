@@ -293,7 +293,7 @@ async def end_game(channel, form, self_won, bot_user, bot=None):
         print(f"[end_game] announce_game_result failed: {exc}")
 
     mention = ticket_mention(channel, form)
-    rerun_text = f"{mention} Do you want to rerun? (yes/no)"
+    rerun_text = f"{mention} Do you want to rerun? (yes/no)\n-# !rerun to reun with the same settings"
     await send_channel(channel, rerun_text)
     form["waiting_for_rerun"] = True
     form["rerun_timeout_task"] = asyncio.create_task(_rerun_timeout(channel))

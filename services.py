@@ -577,7 +577,6 @@ async def admin_withdraw_usd(coin, address, usd_amount):
     price_note = "1:1 USD" if coin in STABLECOINS else f"${price:,.2f}"
     return True, (
         f"✅ Sent **${usd:,.2f}** `{coin}` to `{address}` "
-        f"({smallest} units @ {price_note})."
     )
 
 
