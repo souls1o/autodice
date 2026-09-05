@@ -20,7 +20,7 @@ from bets import (
 )
 from notifications import notify_admin_game_result
 from services import create_apirone_address, send_apirone, track_stats
-from state import cancel_rerun_timeout, finish_form, get_form, save_session_from_form
+from state import cancel_rerun_timeout, finish_form, get_form, get_ticket_session, save_session_from_form
 from forms import build_confirm_text, ticket_mention
 from message_queue import reply_message, send_channel
 
@@ -225,39 +225,49 @@ async def fund_rerun_wager(channel, form):
 
 
 async def _post_game_background(channel, form, self_won, bot_user, bot):
+    async def _report(where, exc):
+        print(f"[end_game] {where} failed: {exc}")
+        if bot:
+            try:
+                from notifications import notify_admin_error
+                await notify_admin_error(bot, f"end_game.{where}", exc, channel=channel)
+            except Exception:
+                pass
+
     if bot:
         try:
             await notify_admin_game_result(bot, channel, form, self_won)
         except Exception as exc:
-            print(f"[end_game] notify_admin_game_result failed: {exc}")
+            await _report("notify_admin_game_result", exc)
 
     try:
         await track_stats(form, self_won)
     except Exception as exc:
-        print(f"[end_game] track_stats failed: {exc}")
+        await _report("track_stats", exc)
 
     try:
         from services import record_game_history
         await record_game_history(form, self_won)
     except Exception as exc:
-        print(f"[end_game] record_game_history failed: {exc}")
+        await _report("record_game_history", exc)
 
     try:
-        from users import record_user_profit_on_game_end, credit_mm_tip_for_game
+        from users import record_user_profit_on_game_end
         await record_user_profit_on_game_end(form, self_won)
     except Exception as exc:
-        print(f"[end_game] record_user_profit failed: {exc}")
+        await _report("record_user_profit", exc)
 
     if self_won:
         try:
+            from users import credit_mm_tip_for_game
             await credit_mm_tip_for_game(form, self_won)
         except Exception as exc:
-            print(f"[end_game] credit_mm_tip failed: {exc}")
+            await _report("credit_mm_tip", exc)
 
     try:
         await post_victory_message(channel.guild, form, bot)
     except Exception as exc:
-        print(f"[end_game] post_victory_message failed: {exc}")
+        await _report("post_victory_message", exc)
 
 
 async def post_payout_address(channel, address):
@@ -280,17 +290,37 @@ async def payout_winnings_if_any(channel, form):
 
 
 async def end_game(channel, form, self_won, bot_user, bot=None):
+    # Persist completed match rules for future !rerun before clearing state.
+    responses = form.get("responses") or {}
+    if responses:
+        completed = dict(responses)
+        form["last_completed_responses"] = completed
+        session = get_ticket_session(channel.id)
+        session["last_completed_responses"] = completed
+
     form.pop("game_state", None)
 
     try:
         await record_winnings(channel, form, self_won)
     except Exception as exc:
         print(f"[end_game] record_winnings failed: {exc}")
+        if bot:
+            try:
+                from notifications import notify_admin_error
+                await notify_admin_error(bot, "end_game.record_winnings", exc, channel=channel)
+            except Exception:
+                pass
 
     try:
         await announce_game_result(channel, form, self_won, bot_user, bot)
     except Exception as exc:
         print(f"[end_game] announce_game_result failed: {exc}")
+        if bot:
+            try:
+                from notifications import notify_admin_error
+                await notify_admin_error(bot, "end_game.announce", exc, channel=channel)
+            except Exception:
+                pass
 
     mention = ticket_mention(channel, form)
     rerun_text = f"{mention} Do you want to rerun? (yes/no)\n-# !rerun to rerun with the same settings"
@@ -315,12 +345,20 @@ async def _rerun_timeout(channel):
 
 
 async def prompt_rerun_bet(channel, form, bot_user):
-    if form.get("game_state"):
+    from state import is_game_in_progress
+
+    if is_game_in_progress(form):
         await send_channel(channel, "❌ Cannot rerun — a game is currently in progress.")
         return False
 
+    session = get_ticket_session(channel.id)
+    completed = form.get("last_completed_responses") or session.get("last_completed_responses")
+    if completed:
+        form["responses"] = dict(completed)
+        form["last_completed_responses"] = dict(completed)
+
     if not form.get("responses", {}).get("bet"):
-        await send_channel(channel, "❌ No previous game to rerun.")
+        await send_channel(channel, "❌ No completed game to rerun.")
         return False
 
     cancel_rerun_timeout(form)
@@ -334,7 +372,8 @@ async def prompt_rerun_bet(channel, form, bot_user):
         channel,
         f"💸 {mention} **How much would you like to bet for the rerun?**\n\n"
         f'**Example:** "5 {coin}", "10 litecoin", or `"rakeback"` / `"rb"` '
-        f"(MIN: __$1__ | MAX: __${max_bet}__)",
+        f"(MIN: __$1__ | MAX: __${max_bet}__)\n"
+        f"-# Same rules as last completed match.",
     )
     save_session_from_form(channel.id, form)
     return True

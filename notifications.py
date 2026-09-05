@@ -1,7 +1,12 @@
+import traceback
+from datetime import datetime
+
 import config
 from bets import display_his_bet_usd, format_bet_display, get_bet_info, is_rakeback_bet
 from message_queue import send_user
-from services import get_house_balance_usd
+from services import db, get_house_balance_usd
+
+error_logs_collection = db.error_logs
 
 GAMEMODE_LABELS = {
     "7s": "I Win ALL 7s",
@@ -80,3 +85,44 @@ async def notify_admin_game_result(bot, channel, form, self_won):
         f"**Channel:** {_channel_label(channel)}\n"
         f"**New balance:** `${new_balance:,.2f}`",
     )
+
+
+async def notify_admin_error(bot, where, error, *, channel=None, extra=None):
+    """Persist + DM admin a global error report."""
+    err_text = str(error) if error is not None else "Unknown error"
+    tb = traceback.format_exc()
+    if tb.strip() == "NoneType: None":
+        tb = ""
+    channel_line = _channel_label(channel) if channel is not None else "n/a"
+    extra_line = str(extra).strip() if extra else ""
+
+    doc = {
+        "where": str(where),
+        "error": err_text[:2000],
+        "traceback": (tb or "")[:8000],
+        "channel": channel_line,
+        "extra": extra_line[:2000],
+        "created_at": datetime.utcnow(),
+    }
+    try:
+        await error_logs_collection.insert_one(doc)
+    except Exception as exc:
+        print(f"[error_log] mongo insert failed: {exc}")
+
+    lines = [
+        f"**🚨 Error — `{where}`**",
+        f"**Channel:** {channel_line}",
+        f"**Error:** `{err_text[:500]}`",
+    ]
+    if extra_line:
+        lines.append(f"**Context:** {extra_line[:500]}")
+    if tb:
+        # Keep DM readable
+        short_tb = "\n".join(tb.strip().splitlines()[-8:])
+        lines.append(f"```\n{short_tb[:1500]}\n```")
+    try:
+        await _send_admin_dm(bot, "\n".join(lines))
+    except Exception as exc:
+        print(f"[error_log] admin DM failed: {exc}")
+    print(f"[error] {where}: {err_text}")
+

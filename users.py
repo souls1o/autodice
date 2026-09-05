@@ -883,7 +883,7 @@ def build_mm_ticket_commands_dm():
         "`!usdc-bnb` / `!usdc-eth` — USDC on BSC / ERC-20\n"
         "`!hold` — show current winnings for this ticket\n"
         "`!profile` [user_id] — wagered, profit, level & perks\n"
-        "`!rerun` — rerun with a new bet amount\n"
-        "`!restart` — restart the bet form (only before funds are sent)\n"
+        "`!rerun` — rerun last completed match (new bet amount)\n"
+        "`!restart` — restart form to change rules (not during an active game)\n"
         "`!cancel` — cancel and payout winnings if any"
     )

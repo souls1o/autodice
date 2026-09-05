@@ -33,9 +33,11 @@ from state import (
     cancel_active_form,
     cancel_rerun_timeout,
     finish_form,
+    form_from_session,
     get_form,
     get_hold_data,
     get_ticket_session,
+    is_game_in_progress,
     is_maintenance_mode,
     is_ticket_channel,
     new_form_dict,
@@ -64,6 +66,7 @@ TICKET_COMMANDS = frozenset({
     "!ltc", "!eth", "!sol",
     "!restart", "!hold", "!profile", "!rerun", "!cancel",
     "!clearhold", "!changebet", "!changeplayer", "!tip", "!withdraw",
+    "!forceend",
 })
 TICKET_CMD_COOLDOWN_SECONDS = 3.0
 _ticket_cmd_cooldown = {}  # (channel_id, user_id) -> monotonic timestamp
@@ -100,10 +103,10 @@ def build_dm_help_text(user_id, *, is_mm=False):
         "`!ltc` / `!eth` / `!sol` — get a deposit address",
         "`!hold` — show current winnings for this ticket",
         "`!profile` [user_id] — wagered, profit, level & perks",
-        "`!rerun` — rerun with a new bet amount",
+        "`!rerun` — rerun last completed match (new bet amount)",
         "`!changebet <usd>` — change bet before a game starts",
         "`!changeplayer <user_id>` — transfer ticket before answering the form",
-        "`!restart` — restart the bet form (only before funds are sent)",
+        "`!restart` — restart form to change rules (not during an active game)",
         "`!cancel` — cancel and payout winnings if any",
     ]
     if is_mm:
@@ -121,6 +124,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "`!stats` — wagered, profit, games, and house balance",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
             "`!withdraw <coin> <address> <usd>` — Apirone send (`btc`/`eth`/`ltc`/`usdt@eth`/…)",
+            "`!forceend self|player` — force-finish stuck match & award hold",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
             "`!setchannel <id>` — set auto-post channel",
@@ -695,6 +699,10 @@ async def handle_ticket_command(message, bot_user, bot=None):
         await handle_hold_command(message, bot_user)
         return True
 
+    if cmd == "!forceend":
+        await handle_forceend_command(message, bot_user, bot)
+        return True
+
     if cmd == "!profile":
         from users import resolve_profile_command
         parts = message.content.strip().split(maxsplit=1)
@@ -901,18 +909,29 @@ async def handle_changeplayer_command(message, bot_user):
 
 async def handle_rerun_command(message, bot_user, bot=None):
     from postgame import process_rerun
-    from state import form_from_session
 
     channel = message.channel
     form = get_form(channel.id)
     if not form:
         form = form_from_session(channel.id)
-    if not form or not form.get("responses", {}).get("bet"):
-        await send_channel(channel, "❌ No previous game to rerun.")
+    if is_game_in_progress(form):
+        await send_channel(channel, "❌ Cannot rerun — a game is currently in progress.")
+        return
+
+    session = get_ticket_session(channel.id)
+    completed = (form or {}).get("last_completed_responses") or session.get("last_completed_responses")
+    if completed:
+        if not form:
+            form = form_from_session(channel.id) or new_form_dict(
+                channel.id, session.get("ticket_user_id")
+            )
+        form["responses"] = dict(completed)
+        form["last_completed_responses"] = dict(completed)
+    elif not form or not form.get("responses", {}).get("bet"):
+        await send_channel(channel, "❌ No completed game to rerun.")
         return
 
     active_forms[channel.id] = form
-    session = get_ticket_session(channel.id)
     session.pop("require_bot_ping", None)
     await process_rerun(channel, form, bot_user, bot)
 
@@ -920,7 +939,7 @@ async def handle_rerun_command(message, bot_user, bot=None):
 async def handle_cancel_command(message, bot_user):
     channel = message.channel
     form = get_form(channel.id)
-    if form and (form.get("game_started") or form.get("game_state")):
+    if is_game_in_progress(form):
         await send_channel(channel, "❌ Cannot cancel — game has already started.")
         return
 
@@ -963,15 +982,64 @@ async def handle_cancel_command(message, bot_user):
 async def handle_restart_command(message, bot_user, bot=None):
     channel = message.channel
     form = get_form(channel.id)
-    if form and form.get("payout_address"):
-        await send_channel(channel, "❌ Cannot restart — funds have already been sent.")
+    if is_game_in_progress(form):
+        await send_channel(channel, "❌ Cannot restart — a game is currently in progress.")
         return
 
     if form:
+        # Keep funds/hold/address; clear in-flight confirm & pending stake flags.
+        form.pop("game_state", None)
+        form.pop("pending_rerun_fund", None)
+        form.pop("pending_hold_deduct", None)
+        form.pop("pending_wager_usd", None)
+        form["waiting_for_rerun"] = False
+        form["waiting_for_rerun_bet"] = False
+        form["waiting_for_confirm"] = False
+        form["waiting_for_address"] = False
+        form["waiting_for_adder_confirm"] = False
+        form["mm_confirm_sent"] = False
+        form.pop("player_conf_pending", None)
+        form.pop("player_confirmed", None)
         cancel_active_form(channel, form)
 
     register_ticket_channel(channel.id)
     await start_ticket_form(channel, bot_user, bot)
+    await send_channel(channel, "♻️ Form restarted — pick new rules. Hold & deposit address kept.")
+
+
+async def handle_forceend_command(message, bot_user, bot=None):
+    """Self-only: force-finish a stuck match and award hold to the chosen winner."""
+    channel = message.channel
+    if message.author.id != bot_user.id:
+        await send_channel(channel, "❌ Self only command.")
+        return
+
+    parts = message.content.strip().split()
+    if len(parts) < 2 or parts[1].lower() not in ("self", "player", "1", "2"):
+        await send_channel(
+            channel,
+            "Usage: `!forceend self` or `!forceend player`\n"
+            "Awards hold as if that side won the in-progress match.",
+        )
+        return
+
+    form = get_form(channel.id)
+    if not is_game_in_progress(form):
+        await send_channel(channel, "❌ No game in progress to force-end.")
+        return
+
+    winner = parts[1].lower()
+    self_won = winner in ("self", "1")
+    from postgame import end_game
+
+    state = form.get("game_state") or {}
+    score = f"{state.get('self_score', '?')}-{state.get('adder_score', '?')}"
+    await send_channel(
+        channel,
+        f"⚠️ Force-ending match at `{score}` — "
+        f"{'self' if self_won else 'player'} awarded.",
+    )
+    await end_game(channel, form, self_won, bot_user, bot)
 
 
 async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):

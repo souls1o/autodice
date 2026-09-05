@@ -225,17 +225,33 @@ async def on_guild_channel_delete(channel):
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Selfbot: ignore own guild traffic (avoid loops), but allow own DM !commands.
+    # Selfbot: ignore own guild traffic (avoid loops), but allow own DM !commands
+    # and a small set of ticket admin commands (e.g. !forceend).
     if message.author == bot.user:
-        if not isinstance(message.channel, discord.DMChannel):
-            return
-        if not (message.content or "").strip().startswith("!"):
-            return
+        content = (message.content or "").strip().lower()
+        if isinstance(message.channel, discord.DMChannel):
+            if not content.startswith("!"):
+                return
+        else:
+            allowed_self = ("!forceend",)
+            if not any(content == c or content.startswith(c + " ") for c in allowed_self):
+                return
 
     try:
         await _handle_message(message)
     except Exception as exc:
         print(f"[on_message] error in #{getattr(message.channel, 'name', '?')}: {exc}")
+        try:
+            from notifications import notify_admin_error
+            await notify_admin_error(
+                bot,
+                "on_message",
+                exc,
+                channel=message.channel,
+                extra=f"author={message.author.id} content={(message.content or '')[:200]}",
+            )
+        except Exception as notify_exc:
+            print(f"[on_message] error notify failed: {notify_exc}")
 
 
 async def _handle_message(message: discord.Message):

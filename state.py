@@ -114,6 +114,8 @@ def save_session_from_form(channel_id, form):
         session.pop("rakeback_stake", None)
     if form.get("responses"):
         session["responses"] = dict(form["responses"])
+    if form.get("last_completed_responses"):
+        session["last_completed_responses"] = dict(form["last_completed_responses"])
     if form.get("game_started"):
         session["game_started"] = True
 
@@ -124,7 +126,12 @@ def form_from_session(channel_id):
     if not session or not session.get("ticket_user_id"):
         return None
     form = new_form_dict(channel_id, session.get("ticket_user_id"))
-    if session.get("responses"):
+    # Prefer last completed match rules for !rerun.
+    completed = session.get("last_completed_responses")
+    if completed:
+        form["responses"] = dict(completed)
+        form["last_completed_responses"] = dict(completed)
+    elif session.get("responses"):
         form["responses"] = dict(session["responses"])
     if session.get("payout_address"):
         form["payout_address"] = session["payout_address"]
@@ -135,6 +142,11 @@ def form_from_session(channel_id):
         form["rakeback_stake"] = session.get("rakeback_stake")
     form["total_wagered_usd"] = session.get("total_wagered_usd", 0.0)
     return form
+
+
+def is_game_in_progress(form):
+    """True after both self and player confirmed (active match)."""
+    return bool(form and form.get("game_state"))
 
 
 def can_cancel_ticket(channel_id, form=None):
