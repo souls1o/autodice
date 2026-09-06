@@ -594,6 +594,117 @@ async def create_apirone_address(coin):
     return None
 
 
+async def get_apirone_address_balance(address, coin="ltc"):
+    """Return confirmed address balance in coin units (not smallest), or None."""
+    if not config.APIRONE_ACCOUNT or not address:
+        return None
+    coin = (coin or "ltc").lower()
+    try:
+        resp = requests.get(
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/addresses/{address}/balance",
+            params={"currency": coin},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            # Fallback: account balance filtered by address
+            resp = requests.get(
+                f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/balance",
+                params={"currency": coin, "addresses": address},
+                timeout=15,
+            )
+        if resp.status_code != 200:
+            return None
+        data = resp.json() or {}
+        # Shape may be {available, total} or [{currency, available, total}, ...]
+        if isinstance(data, list):
+            entry = next((e for e in data if str(e.get("currency", "")).lower() == coin), data[0] if data else {})
+        else:
+            entry = data
+        raw = entry.get("total", entry.get("available", entry.get("balance", 0)))
+        if isinstance(raw, dict):
+            raw = raw.get("total", raw.get("available", 0))
+        smallest = float(raw or 0)
+        unit = float(UNITS.get(coin, 1) or 1)
+        return smallest / unit
+    except Exception as exc:
+        print(f"[apirone] address balance failed for {address}: {exc}")
+        return None
+
+
+# address -> {channel_id, coin, last_balance}
+_tracked_ticket_addresses = {}
+
+
+def track_ticket_deposit_address(channel_id, address, coin="ltc"):
+    """Watch a house receive address posted in a ticket (!ltc / payout)."""
+    if not address:
+        return
+    key = str(address).strip()
+    existing = _tracked_ticket_addresses.get(key)
+    if existing and existing.get("channel_id") == int(channel_id):
+        return
+    _tracked_ticket_addresses[key] = {
+        "channel_id": int(channel_id),
+        "coin": (coin or "ltc").lower(),
+        "last_balance": None,  # set on first successful poll
+    }
+
+
+async def poll_ticket_deposit_addresses(bot=None):
+    """
+    When LTC (etc.) arrives on a tracked ticket address, deduct that USD from self hold.
+    """
+    from bets import deduct_self_hold_on_channel, get_price
+    from message_queue import send_channel
+
+    if not _tracked_ticket_addresses:
+        return
+
+    for address, meta in list(_tracked_ticket_addresses.items()):
+        coin = meta.get("coin") or "ltc"
+        bal = await get_apirone_address_balance(address, coin)
+        if bal is None:
+            continue
+        last = meta.get("last_balance")
+        if last is None:
+            meta["last_balance"] = float(bal)
+            continue
+        received_coin = round(float(bal) - float(last), 8)
+        meta["last_balance"] = float(bal)
+        if received_coin <= 0:
+            continue
+        try:
+            price = 1.0 if coin.startswith("usdt") or coin.startswith("usdc") else get_price(coin)
+            usd = round(received_coin * float(price), 2)
+        except Exception as exc:
+            print(f"[deposit_poll] price failed for {coin}: {exc}")
+            continue
+        if usd <= 0:
+            continue
+        channel_id = meta["channel_id"]
+        deducted = deduct_self_hold_on_channel(channel_id, usd)
+        print(
+            f"[deposit_poll] {address} +{received_coin} {coin} (~${usd}) "
+            f"→ deducted ${deducted} self hold on {channel_id}"
+        )
+        if bot and deducted > 0:
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(channel_id)
+                except Exception:
+                    channel = None
+            if channel is not None:
+                try:
+                    await send_channel(
+                        channel,
+                        f"📥 Received `${deducted:.2f}` on `{address}` — "
+                        f"deducted from self hold.",
+                    )
+                except Exception:
+                    pass
+
+
 async def get_account_balance():
     if not config.APIRONE_ACCOUNT:
         return None

@@ -21,8 +21,6 @@ from bets import (
     get_wager_usd,
     normalize_bet_response,
     normalize_coin,
-    add_self_hold_usd,
-    sync_winnings_crypto,
     usd_to_smallest_unit,
 )
 from services import create_apirone_address, send_apirone
@@ -115,7 +113,8 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "**💰 MM commands**",
             "`!tip` — view tip balance (1% of player wager on self wins)",
             "`!withdraw <usd|all> <ltc_address>` — withdraw tip balance",
-            "`!clearhold 1|2` — clear self or player hold",
+            "`!clearhold <@user|id>` — clear that user's hold (self or player)",
+            "`!forceend <@user|id>` — force-finish stuck match; award that winner",
         ])
     if user_id == config.ADMIN_USER_ID:
         lines.extend([
@@ -124,7 +123,6 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "`!stats` — wagered, profit, games, and house balance",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
             "`!withdraw <coin> <address> <usd>` — Apirone send (`btc`/`eth`/`ltc`/`usdt@eth`/…)",
-            "`!forceend self|player` — force-finish stuck match & award hold",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
             "`!setchannel <id>` — set auto-post channel",
@@ -162,14 +160,15 @@ def message_starts_with(message, prefix):
 
 
 def is_roll_command(content):
-    text = (content or "").strip()
-    lower = text.lower()
-    if not lower.startswith("-roll"):
+    """Valid: `-roll` or `-roll <text>`. Case-sensitive; no `-roll-roll`, `-rolll`, or `-roll<emoji>`."""
+    if not content:
         return False
-    rest = text[5:]
-    if not rest:
+    text = content.strip()
+    if text == "-roll":
         return True
-    return rest[0] == " "
+    if text.startswith("-roll") and len(text) > 5 and text[5].isspace():
+        return True
+    return False
 
 
 def is_cf_command(content):
@@ -490,10 +489,9 @@ async def _fund_from_hold_or_saved_address(channel, form):
         )
         return False
 
-    # Credit top-up into hold so the full wager can be staked from hold on confirm
-    add_self_hold_usd(form, shortfall)
-    sync_winnings_crypto(form)
-    form["pending_hold_deduct"] = wager_usd
+    # Shortfall paid from house wallet — do not inflate hold.
+    # Only the existing hold portion is staked on confirm.
+    form["pending_hold_deduct"] = from_hold
     form["pending_wager_usd"] = wager_usd
     form["waiting_for_address"] = False
     await send_channel(
@@ -686,7 +684,10 @@ async def handle_ticket_command(message, bot_user, bot=None):
             address = await create_apirone_address(coin)
         if address:
             from postgame import post_payout_address
+            from services import track_ticket_deposit_address
             await post_payout_address(message.channel, address)
+            if coin == "ltc":
+                track_ticket_deposit_address(message.channel.id, address, coin)
         else:
             await send_channel(message.channel, f"❌ Failed to generate {label} address.")
         return True
@@ -798,15 +799,27 @@ async def handle_hold_command(message, bot_user):
 
 
 async def handle_clearhold_command(message, bot_user):
+    from users import parse_discord_user_id
+
     channel = message.channel
-    parts = message.content.strip().split()
-    if len(parts) < 2 or parts[1] not in ("1", "2"):
-        await send_channel(channel, "Usage: `!clearhold 1` (self) or `!clearhold 2` (player)")
+    parts = message.content.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await send_channel(
+            channel,
+            f"Usage: `!clearhold {bot_user.mention}` or `!clearhold <@player|id>`",
+        )
         return
+    try:
+        target_id = parse_discord_user_id(parts[1], mentions=message.mentions)
+    except (TypeError, ValueError):
+        await send_channel(channel, "❌ Invalid user id / mention.")
+        return
+
     form = get_form(channel.id)
     session = get_ticket_session(channel.id)
-    target = form if form else session
-    if parts[1] == "1":
+    player_id = (form or {}).get("ticket_user_id") or session.get("ticket_user_id")
+
+    if int(target_id) == int(bot_user.id):
         if form:
             clear_self_hold(form)
             save_session_from_form(channel.id, form)
@@ -815,17 +828,25 @@ async def handle_clearhold_command(message, bot_user):
             session["winnings_usd"] = 0.0
             session["winnings_crypto"] = 0.0
         await send_channel(channel, f"✅ Cleared {bot_user.mention} hold.")
-    else:
+        return
+
+    if player_id and int(target_id) == int(player_id):
         if form:
             clear_player_hold(form)
             save_session_from_form(channel.id, form)
         else:
             session["player_hold_usd"] = 0.0
-        player_form = form or {"ticket_user_id": session.get("ticket_user_id")}
+        player_form = form or {"ticket_user_id": player_id}
         await send_channel(
             channel,
             f"✅ Cleared {ticket_mention(channel, player_form)} hold.",
         )
+        return
+
+    await send_channel(
+        channel,
+        f"❌ Mention **{bot_user.mention}** (self hold) or the ticket player (player hold).",
+    )
 
 
 async def handle_changebet_command(message, bot_user):
@@ -1008,19 +1029,28 @@ async def handle_restart_command(message, bot_user, bot=None):
 
 
 async def handle_forceend_command(message, bot_user, bot=None):
-    """Self-only: force-finish a stuck match and award hold to the chosen winner."""
+    """Self or MM: force-finish a stuck match and award hold to the mentioned winner."""
+    from users import parse_discord_user_id, user_has_mm_role
+
     channel = message.channel
-    if message.author.id != bot_user.id:
-        await send_channel(channel, "❌ Self only command.")
+    is_self = message.author.id == bot_user.id
+    is_mm = await user_has_mm_role(bot, message.author.id, member=message.author)
+    if not is_self and not is_mm:
+        await send_channel(channel, "❌ Self or MM only command.")
         return
 
-    parts = message.content.strip().split()
-    if len(parts) < 2 or parts[1].lower() not in ("self", "player", "1", "2"):
+    parts = message.content.strip().split(maxsplit=1)
+    if len(parts) < 2:
         await send_channel(
             channel,
-            "Usage: `!forceend self` or `!forceend player`\n"
+            f"Usage: `!forceend {bot_user.mention}` or `!forceend <@player|id>`\n"
             "Awards hold as if that side won the in-progress match.",
         )
+        return
+    try:
+        winner_id = parse_discord_user_id(parts[1], mentions=message.mentions)
+    except (TypeError, ValueError):
+        await send_channel(channel, "❌ Invalid user id / mention.")
         return
 
     form = get_form(channel.id)
@@ -1028,16 +1058,29 @@ async def handle_forceend_command(message, bot_user, bot=None):
         await send_channel(channel, "❌ No game in progress to force-end.")
         return
 
-    winner = parts[1].lower()
-    self_won = winner in ("self", "1")
+    player_id = form.get("ticket_user_id")
+    if int(winner_id) == int(bot_user.id):
+        self_won = True
+        winner_label = bot_user.mention
+    elif player_id and int(winner_id) == int(player_id):
+        self_won = False
+        winner_label = f"<@{player_id}>"
+    else:
+        await send_channel(
+            channel,
+            f"❌ Winner must be {bot_user.mention} or the ticket player"
+            + (f" (<@{player_id}>)" if player_id else "")
+            + ".",
+        )
+        return
+
     from postgame import end_game
 
     state = form.get("game_state") or {}
     score = f"{state.get('self_score', '?')}-{state.get('adder_score', '?')}"
     await send_channel(
         channel,
-        f"⚠️ Force-ending match at `{score}` — "
-        f"{'self' if self_won else 'player'} awarded.",
+        f"⚠️ Force-ending match at `{score}` — {winner_label} awarded.",
     )
     await end_game(channel, form, self_won, bot_user, bot)
 
@@ -1092,9 +1135,6 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                         f"❌ Transfer failed: {err if isinstance(err, str) else err}",
                     )
                     return
-                add_self_hold_usd(form, shortfall)
-                sync_winnings_crypto(form)
-                from_hold = wager_usd
                 await send_channel(
                     message.channel,
                     f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` "

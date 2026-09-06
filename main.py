@@ -196,6 +196,11 @@ async def watchdog():
     if not auto_post.is_running():
         print("[watchdog] auto_post stopped — restarting")
         ensure_auto_post()
+    try:
+        from services import poll_ticket_deposit_addresses
+        await poll_ticket_deposit_addresses(bot)
+    except Exception as exc:
+        print(f"[watchdog] deposit poll failed: {exc}")
 
 
 @watchdog.before_loop

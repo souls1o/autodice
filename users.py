@@ -595,7 +595,7 @@ async def credit_mm_tip_for_game(form, self_won):
 
     if not self_won:
         return
-    mm_id = form.get("funds_recipient_id") or form.get("game_confirmer_user_id")
+    mm_id = form.get("game_confirmer_user_id") or form.get("funds_recipient_id")
     if not mm_id:
         return
 

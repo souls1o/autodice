@@ -139,8 +139,8 @@ async def record_winnings(channel, form, self_won):
 
 
 async def send_rerun_shortfall_before_confirm(channel, form):
-    """Send crypto shortfall BEFORE confirmation; credit that amount into self hold."""
-    from bets import add_self_hold_usd, get_self_hold_usd, sync_legacy_winnings
+    """Send crypto shortfall BEFORE confirmation. Hold stake is only the existing hold portion."""
+    from bets import get_self_hold_usd, sync_legacy_winnings
 
     his_bet_usd, my_bet_usd, coin = get_bet_info(form)
     wager_usd = my_bet_usd
@@ -178,11 +178,9 @@ async def send_rerun_shortfall_before_confirm(channel, form):
         await send_channel(channel, f"❌ Rerun transfer failed: {err if isinstance(err, str) else err}")
         return False
 
-    # Top-up becomes part of hold so confirm can stake the full wager from hold
-    add_self_hold_usd(form, shortfall)
-    sync_winnings_crypto(form)
+    # Shortfall paid from house wallet — do not inflate hold.
     form["rerun_shortfall_sent"] = shortfall
-    form["pending_hold_deduct"] = wager_usd
+    form["pending_hold_deduct"] = from_hold
     await send_channel(
         channel,
         f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun "
@@ -271,8 +269,11 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
 
 
 async def post_payout_address(channel, address):
-    """Post a house payout address without changing hold."""
+    """Post a house receive address and track deposits → self hold deductions."""
+    from services import track_ticket_deposit_address
+
     await send_channel(channel, f"`{address}`")
+    track_ticket_deposit_address(channel.id, address, "ltc")
 
 
 async def payout_winnings_if_any(channel, form):

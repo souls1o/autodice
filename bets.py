@@ -300,6 +300,29 @@ def subtract_self_hold_usd(form, usd):
     return deduct
 
 
+def deduct_self_hold_on_channel(channel_id, usd_amount):
+    """Subtract USD from ticket self hold (form or session). Returns amount deducted."""
+    from state import active_forms, get_ticket_session, save_session_from_form
+
+    usd = round(float(usd_amount or 0), 2)
+    if usd <= 0:
+        return 0.0
+    form = active_forms.get(channel_id)
+    if form:
+        deducted = subtract_self_hold_usd(form, usd)
+        sync_winnings_crypto(form)
+        save_session_from_form(channel_id, form)
+        return round(float(deducted), 2)
+    session = get_ticket_session(channel_id)
+    available = get_self_hold_usd(session)
+    deducted = round(min(available, usd), 2)
+    if deducted <= 0:
+        return 0.0
+    session["self_hold_usd"] = round(available - deducted, 2)
+    session["winnings_usd"] = session["self_hold_usd"]
+    return deducted
+
+
 def clear_self_hold(form):
     sync_legacy_winnings(form)
     form["self_hold_usd"] = 0.0
