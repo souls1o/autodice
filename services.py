@@ -237,10 +237,16 @@ def _add_unique_user(period_entry, user_id):
 
 
 async def track_stats(form, self_won):
+    from bets import is_rakeback_bet
+
     his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
     # House/self stake only — not combined with the player's side.
     wagered = round(my_bet_usd, 2)
-    profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
+    # Rakeback: player puts up no cash — self win is $0 profit; player win = −house stake.
+    if is_rakeback_bet(form):
+        profit = 0.0 if self_won else round(-my_bet_usd, 2)
+    else:
+        profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
     game = form.get("responses", {}).get("game", "dice")
     user_id = str(form["ticket_user_id"])
 
@@ -421,7 +427,10 @@ async def track_ticket_game(form, self_won):
     his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
     player_wagered = 0.0 if is_rakeback_bet(form) else round(his_bet_usd, 2)
     bot_wagered = round(my_bet_usd, 2)
-    profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
+    if is_rakeback_bet(form):
+        profit = 0.0 if self_won else round(-my_bet_usd, 2)
+    else:
+        profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
     user_id = form.get("ticket_user_id")
 
     # In-memory session mirror (active tickets).
