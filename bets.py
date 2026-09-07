@@ -100,7 +100,7 @@ def get_max_bet(form):
     if gamemode == "7s":
         return 150
     if gamemode in ("fair", "ties", "plus1", "lead"):
-        return 200
+        return 300
     return 50
 
 

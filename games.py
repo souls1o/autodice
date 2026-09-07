@@ -60,9 +60,16 @@ async def get_command_before_message(channel, embed_message, predicate):
 
 
 def _is_cf_mm(form, author):
-    mm_id = form.get("funds_recipient_id")
-    if mm_id:
-        return author.id == mm_id
+    """Accept -cf from the game confirmer, funds recipient, or any listen-role MM."""
+    uid = getattr(author, "id", None)
+    if uid is None:
+        return False
+    confirmer = form.get("game_confirmer_user_id")
+    if confirmer and int(uid) == int(confirmer):
+        return True
+    recipient = form.get("funds_recipient_id")
+    if recipient and int(uid) == int(recipient):
+        return True
     return member_has_listen_role(author)
 
 
@@ -748,8 +755,8 @@ async def _handle_bot_roll_embed(message, form, bot_user, bot, cmd, total):
 
 async def handle_coinflip_embed(message, form, bot_user, bot):
     """
-    One MM -cf per point. Nearest -cf before the embed must be from the MM
-    who received the crypto (funds_recipient_id). Embed must contain Heads or Tails.
+    One MM -cf per point. Nearest -cf before the embed must be from the
+    confirmer, funds recipient, or a listen-role MM. Embed must contain Heads or Tails.
     """
     state = form["game_state"]
     if state.get("scoring"):

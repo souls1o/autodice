@@ -17,7 +17,7 @@ stats_collection = db.stats
 tickets_collection = db.tickets
 history_collection = db.game_history
 
-HISTORY_PAGE_SIZE = 5
+HISTORY_PAGE_SIZE = 10
 
 HOUSE_COINS = ("btc", "eth", "ltc")
 _EMPTY_PERIOD = {"wagered": 0.0, "profit": 0.0, "games": 0, "unique_users": []}

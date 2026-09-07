@@ -222,23 +222,64 @@ async def _notify_mm_ticket_commands(channel, recipient_id):
     )
 
 
+def _interaction_invoker(message):
+    """User who ran a slash/app command that produced this message, if any."""
+    meta = getattr(message, "interaction_metadata", None) or getattr(message, "interaction", None)
+    if meta is not None:
+        user = getattr(meta, "user", None) or getattr(meta, "member", None)
+        if user is not None:
+            return user
+
+    # Selfbot / partial parse: read raw interaction payload.
+    raw = getattr(message, "_data", None) or getattr(message, "_raw", None) or {}
+    if isinstance(raw, dict):
+        inter = raw.get("interaction_metadata") or raw.get("interaction") or {}
+        user_data = inter.get("user") if isinstance(inter, dict) else None
+        if isinstance(user_data, dict) and user_data.get("id"):
+            try:
+                import discord
+                return discord.Object(id=int(user_data["id"]))
+            except Exception:
+                class _Uid:
+                    def __init__(self, uid):
+                        self.id = uid
+                return _Uid(int(user_data["id"]))
+    return None
+
+
 async def resolve_funds_recipient(channel, address_message):
-    candidate = None
-    if not address_message.author.bot:
+    """
+    Who should receive the crypto / be recorded as MM for this address post.
+    Prefers the app/slash-command invoker when the poster is an application bot.
+    """
+    candidate = _interaction_invoker(address_message)
+
+    if candidate is None and not getattr(address_message.author, "bot", False):
         candidate = address_message.author
-    else:
-        async for msg in channel.history(limit=2, before=address_message):
-            if (msg.content or "").strip().startswith("?"):
+
+    if candidate is None:
+        # Legacy: bot posts address after a user "?" command (e.g. Dyno).
+        async for msg in channel.history(limit=5, before=address_message):
+            if getattr(msg.author, "bot", False):
+                continue
+            text = (msg.content or "").strip()
+            if text.startswith("?"):
                 candidate = msg.author
-            break
+                break
 
     if candidate is None:
         return None
 
     member = await _member_from_user(channel, candidate)
+    if member is None:
+        # discord.Object from raw payload — fetch member by id
+        try:
+            member = await channel.guild.fetch_member(int(candidate.id))
+        except Exception:
+            member = None
     if member is None or not member_has_funds_recipient_role(member):
         return None
-    return candidate.id
+    return int(candidate.id)
 
 
 def is_adder_confirm(content):
