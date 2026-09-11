@@ -52,13 +52,6 @@ async def get_roll_command_before_embed(
     return None
 
 
-async def get_command_before_message(channel, embed_message, predicate):
-    async for msg in channel.history(limit=30, before=embed_message):
-        if predicate(msg):
-            return msg
-    return None
-
-
 def _is_cf_mm(form, author):
     """Accept -cf from the game confirmer, funds recipient, or any listen-role MM."""
     uid = getattr(author, "id", None)
@@ -73,17 +66,45 @@ def _is_cf_mm(form, author):
     return member_has_listen_role(author)
 
 
-def _register_cf_command(state, cmd_id):
-    if cmd_id in state.get("consumed_cf_cmd_ids", set()):
+def _cf_cmd_queue(state):
+    """FIFO of unmatched MM -cf message ids. Migrates legacy single-slot fields."""
+    queue = state.setdefault("pending_cf_cmd_ids", [])
+    consumed = state.get("consumed_cf_cmd_ids") or set()
+    for key in ("pending_cf_cmd_id", "queued_cf_cmd_id"):
+        old = state.pop(key, None)
+        if old and old not in consumed and old not in queue:
+            queue.append(old)
+    return queue
+
+
+def _cf_embed_queue(state):
+    return state.setdefault("queued_cf_embeds", [])
+
+
+def _queue_cf_command(state, cmd_id):
+    consumed = state.setdefault("consumed_cf_cmd_ids", set())
+    if cmd_id in consumed:
         return False
-    state["pending_cf_cmd_id"] = cmd_id
+    queue = _cf_cmd_queue(state)
+    if cmd_id not in queue:
+        queue.append(cmd_id)
     state["waiting_for_embed"] = True
-    state.pop("queued_cf_cmd_id", None)
+    return True
+
+
+def _queue_cf_embed(state, message_id, flip):
+    consumed = state.setdefault("consumed_embed_ids", set())
+    if message_id in consumed:
+        return False
+    queue = _cf_embed_queue(state)
+    if any(item.get("id") == message_id for item in queue):
+        return False
+    queue.append({"id": message_id, "flip": flip})
     return True
 
 
 def note_mm_cf_command(message, form):
-    """Record MM -cf so the following Heads/Tails embed can be matched to it."""
+    """Queue every MM -cf. Multiple flips before embeds are all kept in order."""
     state = form.get("game_state") or {}
     if state.get("game_type") != "coinflip":
         return False
@@ -91,51 +112,13 @@ def note_mm_cf_command(message, form):
         return False
     if not _is_cf_mm(form, message.author):
         return False
-    if message.id in state.get("consumed_cf_cmd_ids", set()):
-        return True
-    if state.get("scoring"):
-        # MM sent -cf while the previous embed is still being scored — queue it.
-        state["queued_cf_cmd_id"] = message.id
-        return True
-    if state.get("pending_cf_cmd_id"):
-        return True
-    return _register_cf_command(state, message.id)
+    _queue_cf_command(state, message.id)
+    return True
 
 
 async def after_cf_command_registered(channel, form, bot_user, bot):
-    """Match a CF embed that arrived before -cf, or right after a queued -cf."""
-    state = form.get("game_state") or {}
-    pending_id = state.get("pending_cf_cmd_id")
-    if not pending_id:
-        return
-
-    orphans = list(state.get("orphan_cf_embed_ids") or [])
-    for embed_id in orphans:
-        try:
-            msg = await channel.fetch_message(embed_id)
-        except Exception:
-            state.setdefault("orphan_cf_embed_ids", set()).discard(embed_id)
-            continue
-        if msg.id in state.get("consumed_embed_ids", set()):
-            state.setdefault("orphan_cf_embed_ids", set()).discard(embed_id)
-            continue
-        cmd = await _resolve_cf_command(msg)
-        if cmd and cmd.id == pending_id:
-            await handle_coinflip_embed(msg, form, bot_user, bot)
-            return
-
-    try:
-        cmd_msg = await channel.fetch_message(pending_id)
-    except Exception:
-        return
-    consumed = state.get("consumed_embed_ids", set())
-    async for msg in channel.history(limit=10, after=cmd_msg):
-        if msg.id in consumed:
-            continue
-        if not parse_cf_flip(msg):
-            continue
-        await handle_coinflip_embed(msg, form, bot_user, bot)
-        return
+    """Pair queued -cf commands with any embeds already sitting in memory."""
+    await drain_cf_pairs(channel, form, bot_user, bot)
 
 
 def _cf_embed_text(message):
@@ -189,24 +172,6 @@ def parse_cf_flip(message):
     return None
 
 
-async def _resolve_cf_command(message):
-    ref = message.reference
-    if ref:
-        cmd = ref.resolved if isinstance(getattr(ref, "resolved", None), discord.Message) else None
-        if cmd is None and getattr(ref, "message_id", None):
-            try:
-                cmd = await message.channel.fetch_message(ref.message_id)
-            except Exception:
-                cmd = None
-        if cmd is not None and is_cf_command(cmd.content):
-            return cmd
-    return await get_command_before_message(
-        message.channel,
-        message,
-        lambda m: is_cf_command(m.content) and not getattr(m.author, "bot", False),
-    )
-
-
 async def trigger_bot_roll(roll_channel, form, bot_user):
     state = form["game_state"]
     # Lock immediately so overlapping calls / embeds can't double-roll
@@ -218,7 +183,7 @@ async def trigger_bot_roll(roll_channel, form, bot_user):
     state["roll_initiator_id"] = bot_user.id
     state["pending_bot_roll_cmd_id"] = None
     try:
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.25)
         # Re-check game still active and still our turn to send
         if "game_state" not in form or form["game_state"] is not state:
             return
@@ -754,73 +719,88 @@ async def _handle_bot_roll_embed(message, form, bot_user, bot, cmd, total):
 
 
 async def handle_coinflip_embed(message, form, bot_user, bot):
-    """
-    One MM -cf per point. Nearest -cf before the embed must be from the
-    confirmer, funds recipient, or a listen-role MM. Embed must contain Heads or Tails.
-    """
-    state = form["game_state"]
-    if state.get("scoring"):
-        if parse_cf_flip(message) and message.id not in state.get("consumed_embed_ids", set()):
-            state.setdefault("orphan_cf_embed_ids", set()).add(message.id)
+    """Queue a Heads/Tails embed and immediately pair it with queued -cf commands."""
+    state = form.get("game_state") or {}
+    if state.get("game_type") != "coinflip":
         return
-    if not state.get("waiting_for_embed"):
-        return
-    consumed = state.setdefault("consumed_embed_ids", set())
-    consumed_cmds = state.setdefault("consumed_cf_cmd_ids", set())
-    if message.id in consumed:
-        return
-
     flip = parse_cf_flip(message)
     if not flip:
         return
+    _queue_cf_embed(state, message.id, flip)
+    await drain_cf_pairs(message.channel, form, bot_user, bot)
 
-    pending = state.get("pending_cf_cmd_id")
-    if not pending:
-        state.setdefault("orphan_cf_embed_ids", set()).add(message.id)
-        return
 
-    cmd = await _resolve_cf_command(message)
-    if not cmd:
-        return
-    if cmd.id in consumed_cmds:
-        return
-    if not _is_cf_mm(form, cmd.author):
-        return
-    if cmd.id != pending:
-        return
+def _take_cf_pair(state):
+    """Pop the next unmatched (-cf, embed) pair, skipping already-consumed ids."""
+    cmds = _cf_cmd_queue(state)
+    embeds = _cf_embed_queue(state)
+    consumed_cmds = state.setdefault("consumed_cf_cmd_ids", set())
+    consumed_embeds = state.setdefault("consumed_embed_ids", set())
+    while cmds and cmds[0] in consumed_cmds:
+        cmds.pop(0)
+    while embeds and embeds[0].get("id") in consumed_embeds:
+        embeds.pop(0)
+    if not cmds or not embeds:
+        return None
+    cmd_id = cmds.pop(0)
+    item = embeds.pop(0)
+    consumed_cmds.add(cmd_id)
+    consumed_embeds.add(item["id"])
+    return cmd_id, item["flip"]
 
-    consumed.add(message.id)
-    state.setdefault("orphan_cf_embed_ids", set()).discard(message.id)
-    consumed_cmds.add(cmd.id)
-    state.pop("pending_cf_cmd_id", None)
+
+async def drain_cf_pairs(channel, form, bot_user, bot):
+    """
+    Score every queued -cf/embed pair in order.
+    All currently queued pairs are counted immediately; score messages are
+    posted afterward. Flips/embeds that arrive while posting stay queued
+    and are counted on the next pass — no history lookups.
+    """
+    state = form.get("game_state") or {}
+    if state.get("game_type") != "coinflip":
+        return
+    if state.get("cf_draining"):
+        return
+    state["cf_draining"] = True
     state["scoring"] = True
-
     try:
-        user_side = (state.get("user_side") or "heads").lower()
-        if flip == user_side:
-            state["adder_score"] += 1
-        else:
-            state["self_score"] += 1
+        while form.get("game_state") is state:
+            scored_lines = []
+            game_over = False
+            while True:
+                pair = _take_cf_pair(state)
+                if pair is None:
+                    break
+                _cmd_id, flip = pair
+                user_side = (state.get("user_side") or "heads").lower()
+                if flip == user_side:
+                    state["adder_score"] += 1
+                else:
+                    state["self_score"] += 1
+                scored_lines.append(f"`{state['self_score']}-{state['adder_score']}`")
+                first_to = int(state.get("first_to") or 2)
+                if state["self_score"] >= first_to or state["adder_score"] >= first_to:
+                    game_over = True
+                    break
 
-        ticket_channel = await get_ticket_channel(bot, form, fallback=message.channel)
-        await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
+            if not scored_lines:
+                break
 
-        first_to = int(state.get("first_to") or 2)
-        if state["self_score"] >= first_to or state["adder_score"] >= first_to:
-            self_won = state["self_score"] >= first_to
-            await end_game(ticket_channel, form, self_won, bot_user, bot)
-            return
+            ticket_channel = channel
+            if bot and form.get("ticket_channel_id") and getattr(channel, "id", None) != form["ticket_channel_id"]:
+                ticket_channel = await get_ticket_channel(bot, form, fallback=channel)
+            for line in scored_lines:
+                await send_channel(ticket_channel, line)
+
+            if game_over:
+                self_won = state["self_score"] >= int(state.get("first_to") or 2)
+                await end_game(ticket_channel, form, self_won, bot_user, bot)
+                return
     finally:
         if form.get("game_state") is state:
+            state["cf_draining"] = False
             state["scoring"] = False
             state["waiting_for_embed"] = True
-            queued = state.pop("queued_cf_cmd_id", None)
-            if queued and not state.get("pending_cf_cmd_id"):
-                _register_cf_command(state, queued)
-                if bot:
-                    asyncio.create_task(
-                        after_cf_command_registered(message.channel, form, bot_user, bot)
-                    )
 
 
 async def handle_da_hood_message(message, form, bot_user, bot):
@@ -870,7 +850,7 @@ async def start_game(channel, form, bot_user, bot=None):
     form["ticket_channel_id"] = channel.id
     save_session_from_form(channel.id, form)
     if bot:
-        await notify_admin_game_started(bot, channel, form)
+        asyncio.create_task(notify_admin_game_started(bot, channel, form))
     responses = form["responses"]
     game = responses.get("game", "dice")
 
@@ -903,8 +883,11 @@ async def start_game(channel, form, bot_user, bot=None):
             "adder_score": adder_score,
             "waiting_for_embed": True,
             "scoring": False,
+            "cf_draining": False,
             "consumed_embed_ids": set(),
             "consumed_cf_cmd_ids": set(),
+            "pending_cf_cmd_ids": [],
+            "queued_cf_embeds": [],
         }
         if is_lead:
             await send_channel(channel, f"`{self_score}-{adder_score}`")

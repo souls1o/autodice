@@ -1,9 +1,11 @@
+import asyncio
+import time
 import requests
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 import certifi
 import config
-from bets import UNITS, get_bet_info, get_price
+from bets import UNITS, get_bet_info, get_price_async
 
 mongo_client = AsyncIOMotorClient(
     config.MONGO_URI,
@@ -533,23 +535,51 @@ async def build_stats_text():
     return "\n".join(lines)
 
 
+def _http_request(method, url, **kwargs):
+    kwargs.setdefault("timeout", 15)
+    return requests.request(method, url, **kwargs)
+
+
+async def _http(method, url, **kwargs):
+    return await asyncio.to_thread(_http_request, method, url, **kwargs)
+
+
 async def send_apirone(coin, address, amount):
     try:
-        resp = requests.post(
+        resp = await _http(
+            "POST",
             f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/transfer",
             params={"transfer-key": config.APIRONE_TRANSFER_KEY},
             json={"currency": coin.lower(), "destinations": [{"address": address, "amount": amount}]},
+            timeout=20,
         )
-        if resp.status_code == 200:
-            return resp.json()
-        return {"error": resp.text}
+        if resp.status_code in (200, 201):
+            try:
+                data = resp.json()
+            except Exception:
+                return {"ok": True}
+            if isinstance(data, dict):
+                data.setdefault("ok", True)
+                return data
+            return {"ok": True, "data": data}
+        return {"error": resp.text or f"HTTP {resp.status_code}"}
     except Exception as e:
         return {"error": str(e)}
 
 
+def apirone_transfer_error(result):
+    """Return an error string only for a real failure, not a 200 body with error: null."""
+    if not isinstance(result, dict):
+        return "invalid transfer response"
+    err = result.get("error")
+    if err in (None, "", False):
+        return None
+    return err if isinstance(err, str) else str(err)
+
+
 async def admin_withdraw_usd(coin, address, usd_amount):
     """Send USD-equivalent of coin to address via Apirone. Returns (ok, message)."""
-    from bets import STABLECOINS, WITHDRAW_COINS, UNITS, get_price, normalize_coin, usd_to_smallest_unit
+    from bets import STABLECOINS, WITHDRAW_COINS, UNITS, normalize_coin, usd_to_smallest_unit
 
     coin = normalize_coin(coin)
     if coin not in WITHDRAW_COINS:
@@ -572,7 +602,7 @@ async def admin_withdraw_usd(coin, address, usd_amount):
             price = 1.0
             smallest = int(round(usd * UNITS[coin]))
         else:
-            price = get_price(coin)
+            price = await get_price_async(coin)
             smallest = usd_to_smallest_unit(usd, coin, price)
     except Exception as exc:
         return False, f"❌ Could not price {coin}: {exc}"
@@ -580,9 +610,9 @@ async def admin_withdraw_usd(coin, address, usd_amount):
         return False, "❌ Amount too small to send."
 
     result = await send_apirone(coin, address, smallest)
-    if "error" in result:
-        err = result["error"]
-        return False, f"❌ Transfer failed: {err if isinstance(err, str) else err}"
+    err = apirone_transfer_error(result)
+    if err:
+        return False, f"❌ Transfer failed: {err}"
     price_note = "1:1 USD" if coin in STABLECOINS else f"${price:,.2f}"
     return True, (
         f"✅ Sent **${usd:,.2f}** `{coin}` to `{address}` "
@@ -591,7 +621,8 @@ async def admin_withdraw_usd(coin, address, usd_amount):
 
 async def create_apirone_address(coin):
     try:
-        resp = requests.post(
+        resp = await _http(
+            "POST",
             f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/addresses",
             json={"currency": coin.lower()},
             timeout=10,
@@ -604,32 +635,44 @@ async def create_apirone_address(coin):
 
 
 async def get_apirone_address_balance(address, coin="ltc"):
-    """Return confirmed address balance in coin units (not smallest), or None."""
+    """
+    Return address balance in coin units, including unconfirmed (mempool) funds.
+    Apirone `total` = available + unconfirmed; `available` is confirmed-only.
+    """
     if not config.APIRONE_ACCOUNT or not address:
         return None
     coin = (coin or "ltc").lower()
     try:
-        resp = requests.get(
+        resp = await _http(
+            "GET",
             f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/addresses/{address}/balance",
             params={"currency": coin},
-            timeout=15,
+            timeout=10,
         )
         if resp.status_code != 200:
-            # Fallback: account balance filtered by address
-            resp = requests.get(
+            resp = await _http(
+                "GET",
                 f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/balance",
                 params={"currency": coin, "addresses": address},
-                timeout=15,
+                timeout=10,
             )
         if resp.status_code != 200:
             return None
         data = resp.json() or {}
-        # Shape may be {available, total} or [{currency, available, total}, ...]
         if isinstance(data, list):
             entry = next((e for e in data if str(e.get("currency", "")).lower() == coin), data[0] if data else {})
         else:
             entry = data
-        raw = entry.get("total", entry.get("available", entry.get("balance", 0)))
+        balance_obj = entry.get("balance") if isinstance(entry.get("balance"), dict) else None
+        raw = None
+        if balance_obj is not None:
+            raw = balance_obj.get("total")
+            if raw is None:
+                raw = balance_obj.get("available", 0)
+        if raw is None:
+            raw = entry.get("total")
+            if raw is None:
+                raw = entry.get("available", entry.get("balance", 0))
         if isinstance(raw, dict):
             raw = raw.get("total", raw.get("available", 0))
         smallest = float(raw or 0)
@@ -640,13 +683,50 @@ async def get_apirone_address_balance(address, coin="ltc"):
         return None
 
 
-# address -> {channel_id, coin, last_balance}
+async def get_apirone_address_receipts(address, coin="ltc"):
+    """Incoming receipts for an address, including unconfirmed (is_confirmed=false)."""
+    if not config.APIRONE_ACCOUNT or not address:
+        return None
+    coin = (coin or "ltc").lower()
+    try:
+        resp = await _http(
+            "GET",
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/history",
+            params={
+                "currency": coin,
+                "limit": 25,
+                "q": f"item-type:receipt,address:{address}",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json() or {}
+        return list(data.get("items") or [])
+    except Exception as exc:
+        print(f"[apirone] address receipts failed for {address}: {exc}")
+        return None
+
+
+# address -> {channel_id, coin, last_balance, seen_receipt_ids}
 _tracked_ticket_addresses = {}
+_deposit_poll_lock = asyncio.Lock()
+_deposit_poll_bot = None
+
+
+def _shared_deposit_address(address, coin):
+    coin = (coin or "ltc").lower()
+    addr = str(address or "").strip()
+    if coin == "sol" and addr == getattr(config, "SOL_DEPOSIT_ADDRESS", ""):
+        return True
+    if coin == "eth" and addr.lower() == str(getattr(config, "ETH_DEPOSIT_ADDRESS", "") or "").lower():
+        return True
+    return False
 
 
 def track_ticket_deposit_address(channel_id, address, coin="ltc"):
     """Watch a house receive address posted in a ticket (!ltc / payout)."""
-    if not address:
+    if not address or _shared_deposit_address(address, coin):
         return
     key = str(address).strip()
     existing = _tracked_ticket_addresses.get(key)
@@ -655,23 +735,130 @@ def track_ticket_deposit_address(channel_id, address, coin="ltc"):
     _tracked_ticket_addresses[key] = {
         "channel_id": int(channel_id),
         "coin": (coin or "ltc").lower(),
-        "last_balance": None,  # set on first successful poll
+        "last_balance": None,
+        "seen_receipt_ids": None,
     }
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(poll_ticket_deposit_addresses())
+    except RuntimeError:
+        pass
 
 
 async def poll_ticket_deposit_addresses(bot=None):
     """
-    When LTC (etc.) arrives on a tracked ticket address, deduct that USD from self hold.
+    Deduct self hold as soon as incoming crypto is seen (including unconfirmed).
+    Uses receipt history ids so a later confirmation does not deduct twice.
+    Falls back to `total` balance (mempool included) if history is unavailable.
     """
-    from bets import deduct_self_hold_on_channel, get_price
+    global _deposit_poll_bot
+    from bets import deduct_self_hold_on_channel
     from message_queue import send_channel
 
-    if not _tracked_ticket_addresses:
-        return
+    if bot is not None:
+        _deposit_poll_bot = bot
+    bot = bot or _deposit_poll_bot
 
-    for address, meta in list(_tracked_ticket_addresses.items()):
+    async with _deposit_poll_lock:
+        items = list(_tracked_ticket_addresses.items())
+        if not items:
+            return
+        await _poll_ticket_deposit_addresses_locked(bot, items, deduct_self_hold_on_channel, send_channel)
+
+
+async def _apply_inbound_hold_deduction(bot, address, meta, coin_amount, coin, deduct_fn, send_channel):
+    if coin_amount <= 0:
+        return
+    try:
+        if coin.startswith("usdt") or coin.startswith("usdc"):
+            price = 1.0
+        else:
+            price = await get_price_async(coin)
+        usd = round(float(coin_amount) * float(price), 2)
+    except Exception as exc:
+        print(f"[deposit_poll] price failed for {coin}: {exc}")
+        return
+    if usd <= 0:
+        return
+    channel_id = meta["channel_id"]
+    deducted = deduct_fn(channel_id, usd)
+    print(
+        f"[deposit_poll] {address} +{coin_amount} {coin} (~${usd}) "
+        f"→ deducted ${deducted} self hold on {channel_id}"
+    )
+    if bot and deducted > 0:
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+        if channel is not None:
+            try:
+                await send_channel(
+                    channel,
+                    f"📥 Received `${deducted:.2f}` on `{address}` — "
+                    f"deducted from self hold.",
+                )
+            except Exception:
+                pass
+
+
+async def _poll_ticket_deposit_addresses_locked(bot, items, deduct_fn, send_channel):
+    results = await asyncio.gather(
+        *[
+            asyncio.gather(
+                get_apirone_address_receipts(address, meta.get("coin") or "ltc"),
+                get_apirone_address_balance(address, meta.get("coin") or "ltc"),
+                return_exceptions=True,
+            )
+            for address, meta in items
+        ]
+    )
+
+    for (address, meta), pair in zip(items, results):
+        receipts, bal = pair
+        if isinstance(receipts, Exception):
+            print(f"[deposit_poll] receipts failed for {address}: {receipts}")
+            receipts = None
+        if isinstance(bal, Exception):
+            print(f"[deposit_poll] balance failed for {address}: {bal}")
+            bal = None
+
         coin = meta.get("coin") or "ltc"
-        bal = await get_apirone_address_balance(address, coin)
+        unit = float(UNITS.get(coin, 1) or 1)
+        seen = meta.get("seen_receipt_ids")
+
+        if receipts is not None:
+            ids = []
+            new_items = []
+            for item in receipts:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("type") or "receipt").lower() not in ("receipt", ""):
+                    continue
+                rid = str(item.get("id") or "")
+                if not rid:
+                    continue
+                ids.append(rid)
+                if seen is not None and rid not in seen:
+                    new_items.append(item)
+            if seen is None:
+                meta["seen_receipt_ids"] = set(ids)
+                if bal is not None:
+                    meta["last_balance"] = float(bal)
+                continue
+            seen.update(ids)
+            for item in new_items:
+                smallest = float(item.get("amount") or 0)
+                received_coin = round(smallest / unit, 8) if unit else 0.0
+                await _apply_inbound_hold_deduction(
+                    bot, address, meta, received_coin, coin, deduct_fn, send_channel
+                )
+            if bal is not None:
+                meta["last_balance"] = float(bal)
+            continue
+
         if bal is None:
             continue
         last = meta.get("last_balance")
@@ -682,51 +869,36 @@ async def poll_ticket_deposit_addresses(bot=None):
         meta["last_balance"] = float(bal)
         if received_coin <= 0:
             continue
-        try:
-            price = 1.0 if coin.startswith("usdt") or coin.startswith("usdc") else get_price(coin)
-            usd = round(received_coin * float(price), 2)
-        except Exception as exc:
-            print(f"[deposit_poll] price failed for {coin}: {exc}")
-            continue
-        if usd <= 0:
-            continue
-        channel_id = meta["channel_id"]
-        deducted = deduct_self_hold_on_channel(channel_id, usd)
-        print(
-            f"[deposit_poll] {address} +{received_coin} {coin} (~${usd}) "
-            f"→ deducted ${deducted} self hold on {channel_id}"
+        await _apply_inbound_hold_deduction(
+            bot, address, meta, received_coin, coin, deduct_fn, send_channel
         )
-        if bot and deducted > 0:
-            channel = bot.get_channel(channel_id)
-            if channel is None:
-                try:
-                    channel = await bot.fetch_channel(channel_id)
-                except Exception:
-                    channel = None
-            if channel is not None:
-                try:
-                    await send_channel(
-                        channel,
-                        f"📥 Received `${deducted:.2f}` on `{address}` — "
-                        f"deducted from self hold.",
-                    )
-                except Exception:
-                    pass
 
 
-async def get_account_balance():
+_ACCOUNT_BALANCE_CACHE = None
+_ACCOUNT_BALANCE_AT = 0.0
+_ACCOUNT_BALANCE_TTL = 20.0
+
+
+async def get_account_balance(*, fresh=False):
+    global _ACCOUNT_BALANCE_CACHE, _ACCOUNT_BALANCE_AT
     if not config.APIRONE_ACCOUNT:
         return None
+    now = time.monotonic()
+    if not fresh and _ACCOUNT_BALANCE_CACHE is not None and (now - _ACCOUNT_BALANCE_AT) < _ACCOUNT_BALANCE_TTL:
+        return _ACCOUNT_BALANCE_CACHE
     try:
-        resp = requests.get(
+        resp = await _http(
+            "GET",
             f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/balance",
             timeout=15,
         )
         if resp.status_code == 200:
-            return resp.json()
+            _ACCOUNT_BALANCE_CACHE = resp.json()
+            _ACCOUNT_BALANCE_AT = now
+            return _ACCOUNT_BALANCE_CACHE
     except Exception:
         pass
-    return None
+    return _ACCOUNT_BALANCE_CACHE
 
 
 async def get_wallets():
@@ -747,9 +919,9 @@ async def get_wallets():
     return {"wallets": wallets}
 
 
-def _coin_balance_usd(coin, total_smallest):
+async def _coin_balance_usd(coin, total_smallest):
     crypto = total_smallest / UNITS[coin]
-    return crypto * get_price(coin)
+    return crypto * await get_price_async(coin)
 
 
 async def get_house_balance_usd():
@@ -766,7 +938,7 @@ async def get_house_balance_usd():
     for coin in HOUSE_COINS:
         smallest = balances.get(coin, 0)
         try:
-            total_usd += _coin_balance_usd(coin, smallest)
+            total_usd += await _coin_balance_usd(coin, smallest)
         except Exception:
             pass
     return round(total_usd, 2)

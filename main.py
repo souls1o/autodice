@@ -132,6 +132,8 @@ async def on_ready():
     ensure_auto_post()
     if not watchdog.is_running():
         watchdog.start()
+    if not deposit_poll.is_running():
+        deposit_poll.start()
 
     async def _backfill_level_rewards():
         from users import backfill_all_level_rewards
@@ -152,8 +154,16 @@ async def on_ready():
         except Exception as exc:
             print(f"[history] index ensure failed: {exc}")
 
+    async def _prefetch_prices():
+        from bets import get_price_async
+        try:
+            await get_price_async("ltc")
+        except Exception as exc:
+            print(f"[prices] prefetch failed: {exc}")
+
     asyncio.create_task(_backfill_level_rewards())
     asyncio.create_task(_ensure_history_index())
+    asyncio.create_task(_prefetch_prices())
 
 
 @bot.event
@@ -196,15 +206,29 @@ async def watchdog():
     if not auto_post.is_running():
         print("[watchdog] auto_post stopped — restarting")
         ensure_auto_post()
-    try:
-        from services import poll_ticket_deposit_addresses
-        await poll_ticket_deposit_addresses(bot)
-    except Exception as exc:
-        print(f"[watchdog] deposit poll failed: {exc}")
+    if not deposit_poll.is_running():
+        print("[watchdog] deposit_poll stopped — restarting")
+        deposit_poll.start()
 
 
 @watchdog.before_loop
 async def before_watchdog():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(seconds=8)
+async def deposit_poll():
+    if not bot.is_ready():
+        return
+    try:
+        from services import poll_ticket_deposit_addresses
+        await poll_ticket_deposit_addresses(bot)
+    except Exception as exc:
+        print(f"[deposit_poll] failed: {exc}")
+
+
+@deposit_poll.before_loop
+async def before_deposit_poll():
     await bot.wait_until_ready()
 
 
@@ -544,9 +568,7 @@ async def _handle_message(message: discord.Message):
                 if note_mm_cf_command(message, form):
                     await after_cf_command_registered(message.channel, form, bot.user, bot)
                 return
-            if message.embeds and (
-                state.get("waiting_for_embed") or state.get("pending_cf_cmd_id")
-            ):
+            if message.embeds:
                 await handle_da_hood_message(message, form, bot.user, bot)
                 return
         if state.get("game_type") == "dice" and message.author.bot and (
@@ -579,9 +601,6 @@ async def _handle_message(message: discord.Message):
             or float(session.get("winnings_usd", 0) or 0) > 0
         )
         if needs_ping and not message_references_bot(message, bot.user):
-            return
-        await asyncio.sleep(1)
-        if channel_id in active_forms:
             return
         await start_ticket_form(message.channel, bot.user, bot)
         return

@@ -6,6 +6,7 @@ import discord
 
 import config
 from bets import (
+    add_self_hold_usd,
     bet_validator,
     calculate_my_bet,
     clear_player_hold,
@@ -16,14 +17,15 @@ from bets import (
     format_matchup,
     get_bet_info,
     get_max_bet,
-    get_price,
+    get_price_async,
     get_self_hold_usd,
     get_wager_usd,
     normalize_bet_response,
     normalize_coin,
+    sync_winnings_crypto,
     usd_to_smallest_unit,
 )
-from services import create_apirone_address, send_apirone
+from services import apirone_transfer_error, send_apirone
 from notifications import notify_admin_ticket_added
 from message_queue import reply_message, send_channel, send_user
 from state import (
@@ -63,7 +65,8 @@ COIN_ADDRESS_COMMANDS = {
 TICKET_COMMANDS = frozenset({
     "!ltc", "!eth", "!sol",
     "!restart", "!hold", "!profile", "!rerun", "!cancel",
-    "!clearhold", "!changebet", "!changeplayer", "!tip", "!withdraw",
+    "!clearhold", "!setbet", "!setplayer", "!changebet", "!changeplayer",
+    "!tip", "!withdraw",
     "!forceend",
 })
 TICKET_CMD_COOLDOWN_SECONDS = 3.0
@@ -102,8 +105,8 @@ def build_dm_help_text(user_id, *, is_mm=False):
         "`!hold` — show current winnings for this ticket",
         "`!profile` [user_id] — wagered, profit, level & perks",
         "`!rerun` — rerun last completed match (new bet amount)",
-        "`!changebet <usd>` — change bet before a game starts",
-        "`!changeplayer <user_id>` — transfer ticket before answering the form",
+        "`!setbet <usd>` — set bet (not during an active match)",
+        "`!setplayer <@user|id>` — set ticket player (not during an active match)",
         "`!restart` — restart form to change rules (not during an active game)",
         "`!cancel` — cancel and payout winnings if any",
     ]
@@ -405,7 +408,7 @@ async def handle_bot_added_to_channel(bot, channel):
         await notify_maintenance(channel)
         return
     if register_ticket_channel(channel.id):
-        await notify_admin_ticket_added(bot, channel)
+        asyncio.create_task(notify_admin_ticket_added(bot, channel))
 
 
 def ticket_mention(channel, form):
@@ -483,6 +486,34 @@ def build_confirm_text(channel, form, bot_user):
     return f"{first_to} {mention} {side_label}"
 
 
+async def send_usd_to_mm_and_credit_hold(form, channel, address, usd, coin="ltc"):
+    """
+    Send USD to the MM payout address and credit that amount to self hold.
+    Persists hold before any further awaits so a later failure cannot drop the credit.
+    Returns (ok, error_text).
+    """
+    usd = round(float(usd or 0), 2)
+    if usd <= 0:
+        return True, None
+    if not address:
+        return False, "No payout address on file."
+    try:
+        amount = usd_to_smallest_unit(usd, coin, await get_price_async(coin))
+    except Exception as exc:
+        print(f"[mm_send] price lookup failed: {exc}")
+        return False, "Could not price transfer."
+    if amount <= 0:
+        return False, "Amount too small to send."
+    result = await send_apirone(coin, address, amount)
+    err = apirone_transfer_error(result)
+    if err:
+        return False, err
+    add_self_hold_usd(form, usd)
+    sync_winnings_crypto(form)
+    save_session_from_form(channel.id, form)
+    return True, None
+
+
 async def _fund_from_hold_or_saved_address(channel, form):
     """
     If hold covers the wager, reuse it (no address ask).
@@ -514,37 +545,40 @@ async def _fund_from_hold_or_saved_address(channel, form):
     if not address:
         return False
 
-    try:
-        amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
-    except Exception as exc:
-        print(f"[_fund_from_hold_or_saved_address] price lookup failed: {exc}")
-        await send_channel(channel, "❌ Could not price top-up.")
+    ok, err = await send_usd_to_mm_and_credit_hold(form, channel, address, shortfall, coin)
+    if not ok:
+        await send_channel(channel, f"❌ Transfer failed: {err}")
         return False
 
-    result = await send_apirone(coin, address, amount)
-    if "error" in result:
-        err = result["error"]
-        await send_channel(
-            channel,
-            f"❌ Transfer failed: {err if isinstance(err, str) else err}",
-        )
-        return False
-
-    # Shortfall paid from house wallet — do not inflate hold.
-    # Only the existing hold portion is staked on confirm.
-    form["pending_hold_deduct"] = from_hold
+    form["pending_hold_deduct"] = wager_usd
     form["pending_wager_usd"] = wager_usd
     form["waiting_for_address"] = False
     await send_channel(
         channel,
         f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` "
-        f"(`{format_matchup(form)}`)",
+        f"(`{format_matchup(form)}`) — added to self hold",
     )
     save_session_from_form(channel.id, form)
     return True
 
 
+_ticket_start_locks = {}
+
+
+def _ticket_start_lock(channel_id):
+    lock = _ticket_start_locks.get(channel_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ticket_start_locks[channel_id] = lock
+    return lock
+
+
 async def start_ticket_form(channel, bot_user, bot=None):
+    async with _ticket_start_lock(channel.id):
+        await _start_ticket_form(channel, bot_user, bot)
+
+
+async def _start_ticket_form(channel, bot_user, bot=None):
     if is_channel_blacklisted(channel):
         return
     if get_form(channel.id):
@@ -690,11 +724,11 @@ async def handle_ticket_command(message, bot_user, bot=None):
     content = message.content.strip().lower()
     cmd = content.split()[0] if content else ""
 
-    if cmd == "!changebet":
-        await handle_changebet_command(message, bot_user)
+    if cmd in ("!setbet", "!changebet"):
+        await handle_setbet_command(message, bot_user)
         return True
-    if cmd == "!changeplayer":
-        await handle_changeplayer_command(message, bot_user)
+    if cmd in ("!setplayer", "!changeplayer"):
+        await handle_setplayer_command(message, bot_user)
         return True
     if cmd == "!clearhold":
         from users import user_has_mm_role
@@ -722,13 +756,11 @@ async def handle_ticket_command(message, bot_user, bot=None):
         elif coin == "eth":
             address = getattr(config, "ETH_DEPOSIT_ADDRESS", None) or None
         else:
-            address = await create_apirone_address(coin)
+            from postgame import get_or_create_ticket_house_address
+            address = await get_or_create_ticket_house_address(message.channel, get_form(message.channel.id), coin)
         if address:
             from postgame import post_payout_address
-            from services import track_ticket_deposit_address
-            await post_payout_address(message.channel, address)
-            if coin == "ltc":
-                track_ticket_deposit_address(message.channel.id, address, coin)
+            await post_payout_address(message.channel, address, coin)
         else:
             await send_channel(message.channel, f"❌ Failed to generate {label} address.")
         return True
@@ -890,20 +922,21 @@ async def handle_clearhold_command(message, bot_user):
     )
 
 
-async def handle_changebet_command(message, bot_user):
+async def handle_setbet_command(message, bot_user):
     channel = message.channel
     form = get_form(channel.id)
     if not form:
         await send_channel(channel, "❌ No active ticket.")
         return
     if message.author.id != form.get("ticket_user_id"):
+        await send_channel(channel, "❌ Only the ticket player can use `!setbet`.")
         return
-    if form.get("game_state"):
-        await send_channel(channel, "❌ Cannot change bet while a game is in progress.")
+    if is_game_in_progress(form):
+        await send_channel(channel, "❌ Cannot change bet while a match is in progress.")
         return
     parts = message.content.strip().split()
     if len(parts) < 2:
-        await send_channel(channel, "Usage: `!changebet <usd>`")
+        await send_channel(channel, "Usage: `!setbet <usd>`")
         return
     try:
         amount = float(parts[1])
@@ -914,6 +947,7 @@ async def handle_changebet_command(message, bot_user):
     if not bet_validator(normalized, form):
         await send_channel(channel, "❌ Invalid amount or out of range.")
         return
+    form.setdefault("responses", {})
     form["responses"]["bet"] = normalized
     form.pop("rakeback_bet", None)
     form.pop("rakeback_stake", None)
@@ -923,12 +957,43 @@ async def handle_changebet_command(message, bot_user):
         channel,
         f"`{format_bet_display(my_bet)}v{format_bet_display(player_bet)}`",
     )
+    address = form.get("payout_address")
+    if address:
+        hold_usd = get_self_hold_usd(form)
+        extra = round(get_wager_usd(form) - hold_usd, 2)
+        if extra > 0:
+            ok, err = await send_usd_to_mm_and_credit_hold(form, channel, address, extra, "ltc")
+            if not ok:
+                await send_channel(channel, f"❌ Could not top-up MM address: {err}")
+            else:
+                form["pending_hold_deduct"] = get_wager_usd(form)
+                form["pending_wager_usd"] = get_wager_usd(form)
+                await send_channel(
+                    channel,
+                    f"📤 Sent `${format_bet_display(extra)}` LTC to `{address}` "
+                    f"(`{format_matchup(form)}`) — added to self hold",
+                )
+        elif form.get("pending_wager_usd") is not None:
+            form["pending_hold_deduct"] = get_wager_usd(form)
+            form["pending_wager_usd"] = get_wager_usd(form)
     save_session_from_form(channel.id, form)
 
 
-async def handle_changeplayer_command(message, bot_user):
-    """Transfer ticket ownership — only current player, before any form answer."""
-    from users import attach_user_to_form, parse_discord_user_id
+def _setplayer_target_id(message, raw):
+    from users import parse_discord_user_id
+
+    mentions = [
+        m for m in (message.mentions or [])
+        if not getattr(m, "bot", False)
+    ]
+    if mentions:
+        return int(mentions[0].id)
+    return parse_discord_user_id(raw, mentions=message.mentions)
+
+
+async def handle_setplayer_command(message, bot_user):
+    """Transfer ticket ownership. Player may use this anytime except during a match."""
+    from users import attach_user_to_form
 
     channel = message.channel
     form = get_form(channel.id)
@@ -936,23 +1001,19 @@ async def handle_changeplayer_command(message, bot_user):
         await send_channel(channel, "❌ No active ticket.")
         return
     if message.author.id != form.get("ticket_user_id"):
+        await send_channel(channel, "❌ Only the ticket player can use `!setplayer`.")
         return
-    if form.get("step", 0) != 0 or form.get("responses"):
-        await send_channel(
-            channel,
-            "❌ Can only change player before answering the first form question.",
-        )
-        return
-    if form.get("game_state") or form.get("game_started"):
-        await send_channel(channel, "❌ Cannot change player after a game has started.")
+    if is_game_in_progress(form):
+        await send_channel(channel, "❌ Cannot change player while a match is in progress.")
         return
 
     parts = message.content.strip().split(maxsplit=1)
-    if len(parts) < 2:
-        await send_channel(channel, "Usage: `!changeplayer <user_id|@mention>`")
+    raw = parts[1] if len(parts) >= 2 else ""
+    if not raw and not message.mentions:
+        await send_channel(channel, "Usage: `!setplayer <@user|id>`")
         return
     try:
-        new_id = parse_discord_user_id(parts[1], mentions=message.mentions)
+        new_id = _setplayer_target_id(message, raw)
     except (TypeError, ValueError):
         await send_channel(channel, "❌ Invalid user id / mention.")
         return
@@ -966,7 +1027,6 @@ async def handle_changeplayer_command(message, bot_user):
     await attach_user_to_form(form)
     save_session_from_form(channel.id, form)
     await send_channel(channel, f"✅ Ticket player set to <@{new_id}>.")
-    await ask_next_step(channel, bot_user)
 
 
 async def handle_rerun_command(message, bot_user, bot=None):
@@ -1028,17 +1088,10 @@ async def handle_cancel_command(message, bot_user):
     form.pop("player_conf_pending", None)
     form.pop("player_confirmed", None)
 
-    from postgame import payout_winnings_if_any, post_payout_address
-
-    if funds_sent:
-        refund_address = await create_apirone_address("ltc")
-        if refund_address:
-            await post_payout_address(channel, refund_address)
-        else:
-            await send_channel(channel, "❌ Failed to generate LTC refund address.")
+    from postgame import payout_winnings_if_any
 
     active_forms[channel.id] = form
-    await payout_winnings_if_any(channel, form)
+    await payout_winnings_if_any(channel, form, always_post_address=funds_sent)
 
 
 async def handle_restart_command(message, bot_user, bot=None):
@@ -1167,25 +1220,25 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             shortfall = round(wager_usd - from_hold, 2)
 
             if shortfall > 0:
-                amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
-                result = await send_apirone(coin, address, amount)
-                if "error" in result:
-                    err = result["error"]
+                ok, err = await send_usd_to_mm_and_credit_hold(
+                    form, message.channel, address, shortfall, coin
+                )
+                if not ok:
                     await send_channel(
                         message.channel,
-                        f"❌ Transfer failed: {err if isinstance(err, str) else err}",
+                        f"❌ Transfer failed: {err}",
                     )
                     return
                 await send_channel(
                     message.channel,
                     f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` "
-                    f"(`{format_matchup(form)}`)",
+                    f"(`{format_matchup(form)}`) — added to self hold",
                 )
 
             form["waiting_for_address"] = False
             form["payout_address"] = address
             form["funds_recipient_id"] = recipient_id
-            form["pending_hold_deduct"] = from_hold
+            form["pending_hold_deduct"] = wager_usd if shortfall > 0 else from_hold
             form["pending_wager_usd"] = wager_usd
             save_session_from_form(message.channel.id, form)
             # DM ticket commands only the first time this MM is ever seen.

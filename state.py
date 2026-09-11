@@ -106,6 +106,8 @@ def save_session_from_form(channel_id, form):
         session["game_confirmer_user_id"] = form["game_confirmer_user_id"]
     if form.get("payout_address"):
         session["payout_address"] = form["payout_address"]
+    if form.get("house_deposit_addresses"):
+        session["house_deposit_addresses"] = dict(form["house_deposit_addresses"])
     if form.get("rakeback_bet"):
         session["rakeback_bet"] = True
         session["rakeback_stake"] = form.get("rakeback_stake")
@@ -171,6 +173,10 @@ def apply_session_to_form(channel_id, form):
     form["game_confirmer_user_id"] = session.get("game_confirmer_user_id")
     if session.get("payout_address") and not form.get("payout_address"):
         form["payout_address"] = session["payout_address"]
+    if session.get("house_deposit_addresses"):
+        existing = dict(form.get("house_deposit_addresses") or {})
+        existing.update(session["house_deposit_addresses"])
+        form["house_deposit_addresses"] = existing
     if session.get("rakeback_bet"):
         form["rakeback_bet"] = True
         if session.get("rakeback_stake") is not None:
@@ -221,6 +227,8 @@ def new_form_dict(channel_id, ticket_user_id):
     }
     if session.get("payout_address"):
         form["payout_address"] = session["payout_address"]
+    if session.get("house_deposit_addresses"):
+        form["house_deposit_addresses"] = dict(session["house_deposit_addresses"])
     if session.get("funds_recipient_id"):
         form["funds_recipient_id"] = session["funds_recipient_id"]
     if session.get("rakeback_bet"):

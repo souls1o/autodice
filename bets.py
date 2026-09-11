@@ -1,3 +1,4 @@
+import asyncio
 import re
 import time
 import requests
@@ -68,6 +69,8 @@ _ADDRESS_PATTERNS = {
 _PRICE_CACHE = {}
 _LAST_UPDATE = 0
 CACHE_SECONDS = 180
+_PRICE_REFRESH_LOCK = asyncio.Lock()
+_PRICE_REFRESH_TASK = None
 
 
 def normalize_coin(coin_str):
@@ -243,14 +246,21 @@ def sync_legacy_winnings(form):
 
 def add_self_hold_usd(form, usd):
     sync_legacy_winnings(form)
-    form["self_hold_usd"] = round(form["self_hold_usd"] + float(usd), 8)
+    try:
+        add = round(float(usd or 0), 8)
+    except (TypeError, ValueError):
+        return 0.0
+    if add <= 0:
+        return 0.0
+    form["self_hold_usd"] = round(float(form.get("self_hold_usd") or 0) + add, 8)
     form["winnings_usd"] = form["self_hold_usd"]
     try:
         form["winnings_crypto"] = round(
-            form.get("winnings_crypto", 0) + usd_to_crypto_amount(float(usd), "ltc"), 8
+            float(form.get("winnings_crypto") or 0) + usd_to_crypto_amount(add, "ltc"), 8
         )
     except Exception:
         pass
+    return add
 
 
 def add_player_hold_usd(form, usd):
@@ -351,26 +361,78 @@ def format_matchup(form):
     )
 
 
-def get_price(coin):
+def _refresh_prices_sync():
     global _LAST_UPDATE
+    ids = ",".join(COINGECKO_IDS.values())
+    r = requests.get(
+        f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
+        headers={"accept": "application/json", "x-cg-demo-api-key": config.COINGECKO_API_KEY},
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json()
+    for symbol, coin_id in COINGECKO_IDS.items():
+        _PRICE_CACHE[symbol] = float(data[coin_id]["usd"])
+    _LAST_UPDATE = time.time()
+
+
+def _prices_fresh():
+    return bool(_PRICE_CACHE) and (time.time() - _LAST_UPDATE) <= CACHE_SECONDS
+
+
+def _schedule_price_refresh():
+    """Refresh CoinGecko off the event loop; never block Discord handling."""
+    global _PRICE_REFRESH_TASK
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _refresh_prices_sync()
+        return
+    task = _PRICE_REFRESH_TASK
+    if task is not None and not task.done():
+        return
+
+    async def _run():
+        async with _PRICE_REFRESH_LOCK:
+            if _prices_fresh():
+                return
+            await asyncio.to_thread(_refresh_prices_sync)
+
+    _PRICE_REFRESH_TASK = loop.create_task(_run())
+
+
+def get_price(coin):
     coin = coin.lower()
     if coin not in COINGECKO_IDS:
         raise ValueError(f"Unsupported coin: {coin}")
 
-    now = time.time()
-    if now - _LAST_UPDATE > CACHE_SECONDS:
-        ids = ",".join(COINGECKO_IDS.values())
-        r = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
-            headers={"accept": "application/json", "x-cg-demo-api-key": config.COINGECKO_API_KEY},
-            timeout=10,
-        )
-        r.raise_for_status()
-        data = r.json()
-        for symbol, coin_id in COINGECKO_IDS.items():
-            _PRICE_CACHE[symbol] = float(data[coin_id]["usd"])
-        _LAST_UPDATE = now
+    if coin in _PRICE_CACHE:
+        if not _prices_fresh():
+            _schedule_price_refresh()
+        return _PRICE_CACHE[coin]
 
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None and loop.is_running():
+        # Never block the Discord loop on a first-time fetch.
+        _schedule_price_refresh()
+        raise RuntimeError("price cache not ready")
+
+    _refresh_prices_sync()
+    return _PRICE_CACHE[coin]
+
+
+async def get_price_async(coin):
+    coin = coin.lower()
+    if coin not in COINGECKO_IDS:
+        raise ValueError(f"Unsupported coin: {coin}")
+    if _prices_fresh() and coin in _PRICE_CACHE:
+        return _PRICE_CACHE[coin]
+    async with _PRICE_REFRESH_LOCK:
+        if not _prices_fresh() or coin not in _PRICE_CACHE:
+            await asyncio.to_thread(_refresh_prices_sync)
     return _PRICE_CACHE[coin]
 
 

@@ -11,22 +11,21 @@ from bets import (
     format_matchup,
     get_bet_info,
     get_max_bet,
-    get_price,
     get_wager_usd,
     subtract_winnings_usd,
     sync_winnings_crypto,
     usd_to_crypto_amount,
-    usd_to_smallest_unit,
 )
 from notifications import notify_admin_game_result
-from services import create_apirone_address, send_apirone, track_stats
+from services import create_apirone_address, track_stats
 from state import cancel_rerun_timeout, finish_form, get_form, get_ticket_session, save_session_from_form
 from forms import build_confirm_text, ticket_mention
 from message_queue import reply_message, send_channel
 
 RERUN_TIMEOUT_SECONDS = 180
 GAME_NUMBER_PATTERN = re.compile(r"Game #(\d+)", re.IGNORECASE)
-GAME_NUMBER_SCAN_LIMIT = 30
+GAME_NUMBER_SCAN_LIMIT = 50
+_cached_game_number = None
 
 
 def _parse_game_number(content):
@@ -37,6 +36,11 @@ def _parse_game_number(content):
 
 
 async def get_next_game_number(guild, bot=None):
+    global _cached_game_number
+    if _cached_game_number is not None:
+        _cached_game_number += 1
+        return _cached_game_number
+
     channel = guild.get_channel(config.GAME_LOG_CHANNEL_ID)
     if channel is None and bot is not None:
         try:
@@ -44,20 +48,16 @@ async def get_next_game_number(guild, bot=None):
         except Exception:
             channel = None
     if channel is None:
+        _cached_game_number = 1
         return 1
 
-    before = None
-    for _ in range(GAME_NUMBER_SCAN_LIMIT):
-        fetched = False
-        async for message in channel.history(limit=1, before=before):
-            fetched = True
-            before = message
-            game_num = _parse_game_number(message.content)
-            if game_num is not None:
-                return game_num + 1
-        if not fetched:
-            break
+    async for message in channel.history(limit=GAME_NUMBER_SCAN_LIMIT):
+        game_num = _parse_game_number(message.content)
+        if game_num is not None:
+            _cached_game_number = game_num + 1
+            return _cached_game_number
 
+    _cached_game_number = 1
     return 1
 
 
@@ -166,27 +166,22 @@ async def send_rerun_shortfall_before_confirm(channel, form):
     if not address:
         await send_channel(channel, "❌ No payout address on file for rerun.")
         return False
-    try:
-        amount = usd_to_smallest_unit(shortfall, coin, get_price(coin))
-    except Exception as exc:
-        print(f"[send_rerun_shortfall] price lookup failed: {exc}")
-        await send_channel(channel, "❌ Could not price rerun top-up.")
-        return False
-    result = await send_apirone(coin, address, amount)
-    if "error" in result:
-        err = result["error"]
-        await send_channel(channel, f"❌ Rerun transfer failed: {err if isinstance(err, str) else err}")
+
+    from forms import send_usd_to_mm_and_credit_hold
+
+    ok, err = await send_usd_to_mm_and_credit_hold(form, channel, address, shortfall, coin)
+    if not ok:
+        await send_channel(channel, f"❌ Rerun transfer failed: {err}")
         return False
 
-    # Shortfall paid from house wallet — do not inflate hold.
     form["rerun_shortfall_sent"] = shortfall
-    form["pending_hold_deduct"] = from_hold
+    form["pending_hold_deduct"] = wager_usd
+    save_session_from_form(channel.id, form)
     await send_channel(
         channel,
         f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun "
-        f"(`{format_matchup(form)}`)",
+        f"(`{format_matchup(form)}`) — added to self hold",
     )
-    save_session_from_form(channel.id, form)
     return True
 
 
@@ -268,21 +263,54 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
         await _report("post_victory_message", exc)
 
 
-async def post_payout_address(channel, address):
+async def get_or_create_ticket_house_address(channel, form=None, coin="ltc"):
+    """One house receive address per coin per ticket; reused for !ltc / payout / refund."""
+    from state import get_form, get_ticket_session, save_session_from_form
+
+    coin = (coin or "ltc").lower()
+    if coin == "sol":
+        return getattr(config, "SOL_DEPOSIT_ADDRESS", None) or None
+    if coin == "eth":
+        return getattr(config, "ETH_DEPOSIT_ADDRESS", None) or None
+
+    form = form or get_form(channel.id)
+    session = get_ticket_session(channel.id)
+    addrs = dict(session.get("house_deposit_addresses") or {})
+    if form and form.get("house_deposit_addresses"):
+        addrs.update(form["house_deposit_addresses"])
+    existing = addrs.get(coin)
+    if existing:
+        if form is not None:
+            form["house_deposit_addresses"] = addrs
+        session["house_deposit_addresses"] = addrs
+        return existing
+
+    address = await create_apirone_address(coin)
+    if not address:
+        return None
+    addrs[coin] = address
+    session["house_deposit_addresses"] = addrs
+    if form is not None:
+        form["house_deposit_addresses"] = addrs
+        save_session_from_form(channel.id, form)
+    return address
+
+
+async def post_payout_address(channel, address, coin="ltc"):
     """Post a house receive address and track deposits → self hold deductions."""
     from services import track_ticket_deposit_address
 
     await send_channel(channel, f"`{address}`")
-    track_ticket_deposit_address(channel.id, address, "ltc")
+    track_ticket_deposit_address(channel.id, address, coin or "ltc")
 
 
-async def payout_winnings_if_any(channel, form):
+async def payout_winnings_if_any(channel, form, *, always_post_address=False):
     from bets import get_self_hold_usd, sync_legacy_winnings
 
     sync_legacy_winnings(form)
     sync_winnings_crypto(form)
-    if get_self_hold_usd(form) > 0:
-        address = await create_apirone_address("ltc")
+    if get_self_hold_usd(form) > 0 or always_post_address:
+        address = await get_or_create_ticket_house_address(channel, form, "ltc")
         if address:
             await post_payout_address(channel, address)
         else:

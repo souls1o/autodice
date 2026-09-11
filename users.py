@@ -837,6 +837,7 @@ async def build_leaderboard_text(timeframe="all"):
 
 def parse_discord_user_id(raw, *, mentions=None):
     """Parse a snowflake, <@id>, or first mention into an int user id."""
+    mentions = list(mentions or [])
     text = (raw or "").strip()
     if not text and mentions:
         return int(mentions[0].id)
@@ -844,7 +845,12 @@ def parse_discord_user_id(raw, *, mentions=None):
         text = text[2:-1]
         if text.startswith("!"):
             text = text[1:]
-    return int(text)
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        if mentions:
+            return int(mentions[0].id)
+        raise
 
 
 async def admin_add_wager(target_user_id, amount_usd):
@@ -883,6 +889,8 @@ def build_mm_ticket_commands_dm():
         "`!usdc-bnb` / `!usdc-eth` — USDC on BSC / ERC-20\n"
         "`!hold` — show current winnings for this ticket\n"
         "`!profile` [user_id] — wagered, profit, level & perks\n"
+        "`!setbet <usd>` — set bet (not during an active match)\n"
+        "`!setplayer <@user|id>` — set ticket player (not during an active match)\n"
         "`!rerun` — rerun last completed match (new bet amount)\n"
         "`!restart` — restart form to change rules (not during an active game)\n"
         "`!cancel` — cancel and payout winnings if any"
