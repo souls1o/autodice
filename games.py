@@ -302,33 +302,20 @@ async def handle_user_roll(message, form, bot_user):
     if message.author.id != ticket_user_id:
         return
 
-    # While scoring (incl. waiting on the score message queue), never accept —
-    # only queue so the roll survives round reset.
+    # Out-of-turn / mid-score rolls are ignored (not queued).
     if state.get("scoring") or not _user_can_accept_rolls(state, bot_user.id):
-        _queue_user_roll(state, message.id)
-        return
-
-    if state.get("awaiting_user_after_bot") or state.get("pending_bot_total") is not None:
-        _accept_user_roll(state, message.id, ticket_user_id)
         return
 
     _accept_user_roll(state, message.id, ticket_user_id)
 
 
 def _reset_round_state(state, ticket_user_id=None, bot_user_id=None):
-    # Keep queued_user_roll_ids + prefetched_user_totals — out-of-turn rolls
-    # that arrived before the score must still be answered next round.
-    # Re-queue any pending cmds that were activated but not yet consumed.
-    consumed = state.get("consumed_roll_cmd_ids", set())
-    pending = state.get("pending_roll_message_ids", [])
-    queued = state.setdefault("queued_user_roll_ids", [])
-    for roll_id in pending:
-        if roll_id not in consumed and roll_id not in queued:
-            queued.append(roll_id)
-
+    # Out-of-turn rolls are ignored — clear any leftover queue/prefetch state.
     state["user_totals_queue"] = []
     state["pending_user_embeds"] = 0
     state["pending_roll_message_ids"] = []
+    state["queued_user_roll_ids"] = []
+    state["prefetched_user_totals"] = []
     state["bot_rolls_remaining"] = 0
     state["pending_bot_total"] = None
     state["awaiting_user_after_bot"] = False
@@ -340,77 +327,15 @@ def _reset_round_state(state, ticket_user_id=None, bot_user_id=None):
     state["current_player"] = state["first_player"]
 
 
-async def _answer_early_user_rolls(roll_channel, form, bot_user, bot):
-    """
-    If the player already rolled out of turn (cmd and/or embed), bot must roll
-    to match those totals and score — separate from the next bot-first opener.
-    Returns True if it started matching / is waiting on embeds.
-    """
-    state = form["game_state"]
-    prefs = state.setdefault("prefetched_user_totals", [])
-    queued = state.setdefault("queued_user_roll_ids", [])
-    consumed = state.get("consumed_roll_cmd_ids", set())
-
-    # Drop zombies that were already scored
-    if queued:
-        state["queued_user_roll_ids"] = [r for r in queued if r not in consumed]
-        queued = state["queued_user_roll_ids"]
-
-    if not prefs and not queued:
-        return False
-
-    # Fold every prefetched embed into the match queue
-    while prefs:
-        entry = prefs.pop(0)
-        if entry["cmd_id"] in consumed:
-            continue
-        state.setdefault("user_totals_queue", []).append(entry["total"])
-        _consume_user_roll_cmd(state, entry["cmd_id"])
-        consumed = state.get("consumed_roll_cmd_ids", set())
-
-    # Only pull queued cmds that already have embeds. Leave the rest queued
-    # so a later embed can stash + resume (don't activate-then-lose on reset).
-    still_queued = []
-    while queued:
-        roll_id = queued.pop(0)
-        if roll_id in consumed:
-            continue
-        stashed = _take_prefetched_user_total(state, roll_id)
-        if stashed is not None:
-            state.setdefault("user_totals_queue", []).append(stashed)
-            _consume_user_roll_cmd(state, roll_id)
-            consumed = state.get("consumed_roll_cmd_ids", set())
-        else:
-            still_queued.append(roll_id)
-    queued.extend(still_queued)
-
-    if state.get("user_totals_queue"):
-        state["current_player"] = "you"
-        state["waiting_for_embed"] = False
-        state["bot_rolls_remaining"] = len(state["user_totals_queue"])
-        await trigger_bot_roll(roll_channel, form, bot_user)
-        return True
-
-    # Cmds queued without embeds yet must NOT block the bot-first opener.
-    # When their embeds arrive they stash and get matched (or pair with opener).
-    return False
-
-
 async def _start_next_round(roll_channel, form, bot_user, bot):
-    """After a scored pair: match any ready early user rolls, then resume turn order."""
+    """After a scored pair: resume normal turn order. Out-of-turn rolls are ignored."""
     if "game_state" not in form:
         return
     state = form["game_state"]
     state["current_player"] = state["first_player"]
 
-    # Answer ready out-of-turn player rolls first (match + score), then open.
-    if await _answer_early_user_rolls(roll_channel, form, bot_user, bot):
-        return
-
     if is_bot_turn(state):
         await do_next_roll(roll_channel, form, bot_user, bot)
-    else:
-        _try_activate_queued_user_rolls(state, form["ticket_user_id"], bot_user.id)
 
 
 def _apply_bot_roll_bonus(me_total, gamemode, roll_mode):
@@ -457,7 +382,7 @@ async def _score_pair(roll_channel, form, bot_user, bot, me_total, you_total, *,
             await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
             return False
 
-        # Post score while still scoring-locked so out-of-turn rolls only queue
+        # Post score while still scoring-locked so mid-score rolls are ignored
         await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
         _reset_round_state(state)
         state["scoring"] = False
@@ -493,12 +418,9 @@ def parse_roll_from_embed(message):
 
 
 def _next_expected_user_roll_id(state):
-    """Oldest unconsumed user -roll we are waiting on (pending first, then queued)."""
+    """Oldest unconsumed accepted user -roll we are waiting on."""
     consumed = state.get("consumed_roll_cmd_ids", set())
     for rid in state.get("pending_roll_message_ids", []):
-        if rid not in consumed:
-            return rid
-    for rid in state.get("queued_user_roll_ids", []):
         if rid not in consumed:
             return rid
     return None
@@ -585,12 +507,14 @@ async def _handle_user_roll_embed(message, form, bot_user, bot, cmd, total):
     ticket_user_id = form["ticket_user_id"]
 
     if state.get("scoring"):
-        _stash_prefetched_user_total(state, cmd.id, total)
         return
 
-    # Pair against a pending bot-first total
+    # Pair against a pending bot-first total (only accepted/pending rolls).
     pending_bot_total = state.get("pending_bot_total")
+    pending_ids = state.get("pending_roll_message_ids", [])
     if pending_bot_total is not None:
+        if cmd.id not in pending_ids:
+            return
         state["pending_bot_total"] = None
         state["awaiting_user_after_bot"] = False
         state.pop("bot_first_embed_id", None)
@@ -598,17 +522,10 @@ async def _handle_user_roll_embed(message, form, bot_user, bot, cmd, total):
         state["user_totals_queue"] = []
         state["waiting_for_embed"] = False
         _consume_user_roll_cmd(state, cmd.id)
-        stashed = _take_prefetched_user_total(state, cmd.id)
-        await _score_pair(
-            message.channel, form, bot_user, bot, pending_bot_total,
-            stashed if stashed is not None else total,
-        )
+        await _score_pair(message.channel, form, bot_user, bot, pending_bot_total, total)
         return
 
-    pending_ids = state.get("pending_roll_message_ids", [])
-    queued_ids = state.get("queued_user_roll_ids", [])
-
-    # Waiting on OUR bot embed — extra player embeds are early rolls, never bot points
+    # Waiting on OUR bot embed, or player rolled while it is bot's turn — ignore.
     waiting_on_bot = (
         state.get("waiting_for_embed")
         and state.get("roll_initiator_id") == bot_user.id
@@ -621,17 +538,7 @@ async def _handle_user_roll_embed(message, form, bot_user, bot, cmd, total):
         and cmd.id not in pending_ids
     )
 
-    if waiting_on_bot or out_of_turn or (cmd.id in queued_ids and cmd.id not in pending_ids):
-        _stash_prefetched_user_total(state, cmd.id, total)
-        idle = (
-            not state.get("bot_roll_in_flight")
-            and not state.get("waiting_for_embed")
-            and not state.get("scoring")
-            and not state.get("user_totals_queue")
-            and not state.get("pending_bot_roll_cmd_id")
-        )
-        if idle:
-            await _start_next_round(message.channel, form, bot_user, bot)
+    if waiting_on_bot or out_of_turn or cmd.id not in pending_ids:
         return
 
     # Legitimate user-first roll for this round
@@ -665,7 +572,7 @@ async def _handle_bot_roll_embed(message, form, bot_user, bot, cmd, total):
 
     state["pending_bot_roll_cmd_id"] = None
 
-    # Match against queued user totals (user went first / early-roll batch)
+    # Match against user totals (user went first this round)
     if state["user_totals_queue"]:
         you_total = state["user_totals_queue"].pop(0)
         state["bot_rolls_remaining"] = max(0, state.get("bot_rolls_remaining", 1) - 1)
@@ -680,17 +587,7 @@ async def _handle_bot_roll_embed(message, form, bot_user, bot, cmd, total):
             await trigger_bot_roll(message.channel, form, bot_user)
         return
 
-    # Bot opener: pair with a prefetched early user total if present
-    prefetched = _take_prefetched_user_total(state)
-    if prefetched is not None:
-        state["waiting_for_embed"] = False
-        state["pending_bot_total"] = None
-        state["awaiting_user_after_bot"] = False
-        state.pop("bot_first_embed_id", None)
-        await _score_pair(message.channel, form, bot_user, bot, total, prefetched)
-        return
-
-    # Bot went first — hold until user embed
+    # Bot went first — hold until an on-turn user embed
     state["pending_bot_total"] = total
     state["bot_first_embed_id"] = message.id
     state["awaiting_user_after_bot"] = True
@@ -698,24 +595,6 @@ async def _handle_bot_roll_embed(message, form, bot_user, bot, cmd, total):
     state["user_totals_queue"] = []
     state["current_player"] = "you"
     state["waiting_for_embed"] = False
-    _try_activate_queued_user_rolls(state, ticket_user_id, bot_user.id)
-
-    pending_ids = list(state.get("pending_roll_message_ids", []))
-    for cmd_id in pending_ids:
-        stashed = _take_prefetched_user_total(state, cmd_id)
-        if stashed is None:
-            continue
-        _consume_user_roll_cmd(state, cmd_id)
-        bot_total = state.get("pending_bot_total")
-        if bot_total is None:
-            state.setdefault("user_totals_queue", []).append(stashed)
-            continue
-        state["pending_bot_total"] = None
-        state["awaiting_user_after_bot"] = False
-        state.pop("bot_first_embed_id", None)
-        state["waiting_for_embed"] = False
-        await _score_pair(message.channel, form, bot_user, bot, bot_total, stashed)
-        return
 
 
 async def handle_coinflip_embed(message, form, bot_user, bot):

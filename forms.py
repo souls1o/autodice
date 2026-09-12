@@ -116,7 +116,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "**💰 MM commands**",
             "`!tip` — view tip balance (1% of player wager on self wins)",
             "`!withdraw <usd|all> <ltc_address>` — withdraw tip balance",
-            "`!clearhold <@user|id>` — clear that user's hold (self or player)",
+            "`!clearhold` [@user|id] — clear both holds, or only the mentioned side",
             "`!forceend <@user|id>` — force-finish stuck match; award that winner",
         ])
     if user_id == config.ADMIN_USER_ID:
@@ -379,10 +379,19 @@ def should_process_channel(channel, message=None, bot_user=None):
     return False
 
 
+# Channels where the bot was just added — delay history scan so Discord finishes settling.
+_pending_bot_add_scan = set()
+
+
 async def resolve_ticket_user_id(channel, bot_user, *, was_tracked=False):
     session = get_ticket_session(channel.id)
     if session.get("ticket_user_id"):
+        _pending_bot_add_scan.discard(channel.id)
         return session["ticket_user_id"]
+
+    if channel.id in _pending_bot_add_scan:
+        _pending_bot_add_scan.discard(channel.id)
+        await asyncio.sleep(1)
 
     ticket_user_id = None
     bot_referenced = False
@@ -408,6 +417,7 @@ async def handle_bot_added_to_channel(bot, channel):
         await notify_maintenance(channel)
         return
     if register_ticket_channel(channel.id):
+        _pending_bot_add_scan.add(channel.id)
         asyncio.create_task(notify_admin_ticket_added(bot, channel))
 
 
@@ -875,40 +885,54 @@ async def handle_clearhold_command(message, bot_user):
     from users import parse_discord_user_id
 
     channel = message.channel
-    parts = message.content.strip().split(maxsplit=1)
-    if len(parts) < 2:
-        await send_channel(
-            channel,
-            f"Usage: `!clearhold {bot_user.mention}` or `!clearhold <@player|id>`",
-        )
-        return
-    try:
-        target_id = parse_discord_user_id(parts[1], mentions=message.mentions)
-    except (TypeError, ValueError):
-        await send_channel(channel, "❌ Invalid user id / mention.")
-        return
-
     form = get_form(channel.id)
     session = get_ticket_session(channel.id)
     player_id = (form or {}).get("ticket_user_id") or session.get("ticket_user_id")
+    parts = message.content.strip().split(maxsplit=1)
 
-    if int(target_id) == int(bot_user.id):
+    def _clear_self():
         if form:
             clear_self_hold(form)
-            save_session_from_form(channel.id, form)
         else:
             session["self_hold_usd"] = 0.0
             session["winnings_usd"] = 0.0
             session["winnings_crypto"] = 0.0
+
+    def _clear_player():
+        if form:
+            clear_player_hold(form)
+        else:
+            session["player_hold_usd"] = 0.0
+
+    # No target → clear both holds.
+    if len(parts) < 2 and not message.mentions:
+        _clear_self()
+        _clear_player()
+        if form:
+            save_session_from_form(channel.id, form)
+        await send_channel(channel, "✅ Cleared self hold and player hold.")
+        return
+
+    try:
+        target_id = parse_discord_user_id(
+            parts[1] if len(parts) >= 2 else "",
+            mentions=message.mentions,
+        )
+    except (TypeError, ValueError):
+        await send_channel(channel, "❌ Invalid user id / mention.")
+        return
+
+    if int(target_id) == int(bot_user.id):
+        _clear_self()
+        if form:
+            save_session_from_form(channel.id, form)
         await send_channel(channel, f"✅ Cleared {bot_user.mention} hold.")
         return
 
     if player_id and int(target_id) == int(player_id):
+        _clear_player()
         if form:
-            clear_player_hold(form)
             save_session_from_form(channel.id, form)
-        else:
-            session["player_hold_usd"] = 0.0
         player_form = form or {"ticket_user_id": player_id}
         await send_channel(
             channel,
@@ -918,7 +942,7 @@ async def handle_clearhold_command(message, bot_user):
 
     await send_channel(
         channel,
-        f"❌ Mention **{bot_user.mention}** (self hold) or the ticket player (player hold).",
+        f"❌ Use `!clearhold` (both), `{bot_user.mention}` (self), or the ticket player.",
     )
 
 
