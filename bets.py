@@ -143,7 +143,11 @@ def player_rakeback_stake_usd(form):
 
 
 def _fair_house_bet(his_bet, form):
-    edge = float(form.get("fair_edge", 0.10))
+    # Prefer edge frozen for this match so mid-game level-ups cannot resize the stake.
+    edge = form.get("match_fair_edge")
+    if edge is None:
+        edge = form.get("fair_edge", 0.10)
+    edge = float(edge)
     edge = min(max(edge, 0.07), 0.10)
     return round(his_bet * (1.0 - edge), 2)
 
@@ -221,12 +225,14 @@ def get_bet_info(form):
 def get_match_bets(form):
     """
     Stakes for the active/just-finished match.
-    Prefers amounts frozen at confirm so mid-match level/perk changes cannot
-    rewrite fair house edge (or auto-log / settlement).
+    Prefers amounts frozen at confirm/funding so mid-match level/perk changes cannot
+    rewrite fair house edge (auto-log AND hold settlement).
     Returns (his_bet_usd, my_bet_usd, coin, rakeback).
     """
     settled = (form or {}).get("settled_bets") or {}
-    if settled:
+    if settled and (
+        settled.get("my_bet_usd") is not None or settled.get("his_bet_usd") is not None
+    ):
         return (
             round(float(settled.get("his_bet_usd") or 0), 2),
             round(float(settled.get("my_bet_usd") or 0), 2),
@@ -240,6 +246,25 @@ def get_match_bets(form):
         coin or "ltc",
         is_rakeback_bet(form),
     )
+
+
+def freeze_match_fair_edge(form):
+    """Lock the fair edge used for this match's house stake (idempotent)."""
+    if form is None:
+        return None
+    if form.get("match_fair_edge") is not None:
+        return float(form["match_fair_edge"])
+    edge = float(form.get("fair_edge", 0.10) or 0.10)
+    form["match_fair_edge"] = edge
+    return edge
+
+
+def clear_match_stake_freeze(form):
+    if not form:
+        return
+    form.pop("settled_bets", None)
+    form.pop("match_fair_edge", None)
+    form.pop("hold_stake_deducted", None)
 
 
 def get_match_his_display(form):

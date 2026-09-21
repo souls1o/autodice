@@ -732,6 +732,10 @@ async def start_game(channel, form, bot_user, bot=None):
     form.pop("match_settled", None)
     form.pop("winnings_recorded", None)
     form.pop("settled_bets", None)
+    form.pop("hold_stake_deducted", None)
+    # Keep match_fair_edge from funding for this match; otherwise allow a fresh edge.
+    if form.get("pending_wager_usd") is None and form.get("pending_hold_deduct") is None:
+        form.pop("match_fair_edge", None)
 
     # Debit rakeback before hold; refund if hold apply fails.
     ok, err, rb_debited = await debit_rakeback_stake_for_form(form)

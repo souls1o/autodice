@@ -15,6 +15,7 @@ from bets import (
     extract_crypto_address,
     format_bet_display,
     format_matchup,
+    freeze_match_fair_edge,
     get_bet_info,
     get_max_bet,
     get_price_async,
@@ -539,6 +540,7 @@ async def _fund_from_hold_or_saved_address(channel, form):
         return False
 
     if shortfall <= 0:
+        freeze_match_fair_edge(form)
         form["pending_hold_deduct"] = from_hold
         form["pending_wager_usd"] = wager_usd
         form["waiting_for_address"] = False
@@ -558,6 +560,7 @@ async def _fund_from_hold_or_saved_address(channel, form):
         await send_channel(channel, f"❌ Transfer failed: {err}")
         return False
 
+    freeze_match_fair_edge(form)
     form["pending_hold_deduct"] = wager_usd
     form["pending_wager_usd"] = wager_usd
     form["waiting_for_address"] = False
@@ -988,6 +991,7 @@ async def handle_setbet_command(message, bot_user):
             if not ok:
                 await send_channel(channel, f"❌ Could not top-up MM address: {err}")
             else:
+                freeze_match_fair_edge(form)
                 form["pending_hold_deduct"] = get_wager_usd(form)
                 form["pending_wager_usd"] = get_wager_usd(form)
                 await send_channel(
@@ -996,6 +1000,7 @@ async def handle_setbet_command(message, bot_user):
                     f"(`{format_matchup(form)}`)",
                 )
         elif form.get("pending_wager_usd") is not None:
+            freeze_match_fair_edge(form)
             form["pending_hold_deduct"] = get_wager_usd(form)
             form["pending_wager_usd"] = get_wager_usd(form)
     save_session_from_form(channel.id, form)
@@ -1125,10 +1130,13 @@ async def handle_restart_command(message, bot_user, bot=None):
 
     if form:
         # Keep funds/hold/address; clear in-flight confirm & pending stake flags.
+        from bets import clear_match_stake_freeze
+
         form.pop("game_state", None)
         form.pop("pending_rerun_fund", None)
         form.pop("pending_hold_deduct", None)
         form.pop("pending_wager_usd", None)
+        clear_match_stake_freeze(form)
         form["waiting_for_rerun"] = False
         form["waiting_for_rerun_bet"] = False
         form["waiting_for_confirm"] = False
@@ -1255,6 +1263,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
             form["waiting_for_address"] = False
             form["payout_address"] = address
             form["funds_recipient_id"] = recipient_id
+            freeze_match_fair_edge(form)
             form["pending_hold_deduct"] = wager_usd if shortfall > 0 else from_hold
             form["pending_wager_usd"] = wager_usd
             save_session_from_form(message.channel.id, form)

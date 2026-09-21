@@ -145,8 +145,15 @@ async def record_winnings(channel, form, self_won):
     # Pop stake flags first so a later parse error cannot leave stale state.
     stake_from_hold = bool(form.pop("stake_from_hold", False))
     player_stake = float(form.pop("player_stake_from_hold", 0) or 0)
-    # Keep settled_bets through announce / stats (level-up must not rewrite auto-log).
+    hold_deducted = float(form.pop("hold_stake_deducted", 0) or 0)
+    # Keep settled_bets through announce / stats (level-up must not rewrite amounts).
     his_bet_usd, my_bet_usd, _coin, rakeback = get_match_bets(form)
+    if not form.get("settled_bets"):
+        print(
+            f"[hold] WARN ticket={channel.id} missing settled_bets — "
+            f"using match_fair_edge={form.get('match_fair_edge')} "
+            f"fair_edge={form.get('fair_edge')} bets={my_bet_usd}v{his_bet_usd}"
+        )
     sync_legacy_winnings(form)
     form["winnings_coin"] = "ltc"
 
@@ -171,6 +178,7 @@ async def record_winnings(channel, form, self_won):
     print(
         f"[hold] ticket={channel.id} self_won={self_won} "
         f"stake_from_hold={stake_from_hold} player_stake={player_stake} "
+        f"hold_deducted={hold_deducted} "
         f"bets={my_bet_usd}v{his_bet_usd} "
         f"self {before_self:.2f}->{get_self_hold_usd(form):.2f} "
         f"player {before_player:.2f}->{get_player_hold_usd(form):.2f}"
@@ -191,6 +199,8 @@ async def send_rerun_shortfall_before_confirm(channel, form):
     form["pending_hold_deduct"] = from_hold
     form["pending_wager_usd"] = wager_usd
     form["rerun_shortfall_sent"] = 0.0
+    from bets import freeze_match_fair_edge
+    freeze_match_fair_edge(form)
 
     if shortfall <= 0:
         await send_channel(
@@ -226,8 +236,9 @@ async def send_rerun_shortfall_before_confirm(channel, form):
 
 def lock_settled_bets(form, *, my_bet_usd=None, his_bet_usd=None):
     """Freeze match stake amounts for settlement / auto-log (immune to later form edits)."""
-    from bets import display_his_bet_usd, is_rakeback_bet
+    from bets import display_his_bet_usd, freeze_match_fair_edge, is_rakeback_bet
 
+    edge = freeze_match_fair_edge(form)
     live_his, live_my, _coin = get_bet_info(form)
     if his_bet_usd is None:
         his_bet_usd = live_his
@@ -238,15 +249,16 @@ def lock_settled_bets(form, *, my_bet_usd=None, his_bet_usd=None):
         "my_bet_usd": round(float(my_bet_usd or 0), 2),
         "his_display_usd": round(float(display_his_bet_usd(form) or 0), 2),
         "rakeback": bool(is_rakeback_bet(form)),
-        "fair_edge": float(form.get("fair_edge", 0.10) or 0.10),
+        "fair_edge": float(edge if edge is not None else form.get("fair_edge", 0.10) or 0.10),
     }
     return form["settled_bets"]
 
 
 async def apply_hold_after_confirm(channel, form):
     """After confirmation: subtract from self hold only if sufficient. Never sends crypto."""
-    from bets import get_self_hold_usd, subtract_self_hold_usd, sync_legacy_winnings
+    from bets import freeze_match_fair_edge, get_self_hold_usd, subtract_self_hold_usd, sync_legacy_winnings
 
+    freeze_match_fair_edge(form)
     wager_usd = form.pop("pending_wager_usd", None)
     if wager_usd is None:
         wager_usd = get_wager_usd(form)
@@ -263,6 +275,7 @@ async def apply_hold_after_confirm(channel, form):
 
     form.pop("rerun_shortfall_sent", None)
     form["stake_from_hold"] = deducted > 0
+    form["hold_stake_deducted"] = float(deducted or 0)
     # Freeze the funded house stake (not a post-level-up recalculation).
     lock_settled_bets(form, my_bet_usd=float(wager_usd or 0))
     add_wagered_usd(form, wager_usd)
@@ -477,8 +490,11 @@ async def prompt_rerun_bet(channel, form, bot_user):
 
 
 async def finalize_rerun(channel, form, bot_user):
+    from bets import clear_match_stake_freeze
     from users import attach_user_to_form
 
+    # New match — drop prior freeze so attach can apply the post-level-up edge.
+    clear_match_stake_freeze(form)
     await attach_user_to_form(form)
     if not await send_rerun_shortfall_before_confirm(channel, form):
         await payout_winnings_if_any(channel, form)
@@ -530,6 +546,7 @@ async def process_rerun(channel, form, bot_user, bot=None):
 
 async def start_new_form_from_yes(channel, form, bot_user, bot=None):
     """'yes' after a game → brand-new form (new settings), keeping hold/session funds."""
+    from bets import clear_match_stake_freeze
     from forms import ask_next_step
     from state import active_forms, get_ticket_session, new_form_dict
 
@@ -538,6 +555,7 @@ async def start_new_form_from_yes(channel, form, bot_user, bot=None):
     form.pop("pending_rerun_fund", None)
     form.pop("pending_hold_deduct", None)
     form.pop("pending_wager_usd", None)
+    clear_match_stake_freeze(form)
     save_session_from_form(channel.id, form)
 
     ticket_user_id = form["ticket_user_id"]
@@ -545,7 +563,13 @@ async def start_new_form_from_yes(channel, form, bot_user, bot=None):
     funds_recipient_id = form.get("funds_recipient_id")
 
     active_forms.pop(channel.id, None)
-    get_ticket_session(channel.id).pop("require_bot_ping", None)
+    session = get_ticket_session(channel.id)
+    session.pop("require_bot_ping", None)
+    session.pop("settled_bets", None)
+    session.pop("match_fair_edge", None)
+    session.pop("hold_stake_deducted", None)
+    session.pop("stake_from_hold", None)
+    session.pop("player_stake_from_hold", None)
     new_form = new_form_dict(channel.id, ticket_user_id)
     if payout_address:
         new_form["payout_address"] = payout_address

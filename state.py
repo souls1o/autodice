@@ -120,6 +120,16 @@ def save_session_from_form(channel_id, form):
         session["last_completed_responses"] = dict(form["last_completed_responses"])
     if form.get("game_started"):
         session["game_started"] = True
+    if form.get("settled_bets"):
+        session["settled_bets"] = dict(form["settled_bets"])
+    if form.get("match_fair_edge") is not None:
+        session["match_fair_edge"] = form["match_fair_edge"]
+    if form.get("hold_stake_deducted") is not None:
+        session["hold_stake_deducted"] = form["hold_stake_deducted"]
+    if form.get("stake_from_hold") is not None:
+        session["stake_from_hold"] = bool(form["stake_from_hold"])
+    if form.get("player_stake_from_hold") is not None:
+        session["player_stake_from_hold"] = form["player_stake_from_hold"]
 
 
 def form_from_session(channel_id):

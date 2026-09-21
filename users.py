@@ -210,11 +210,17 @@ def apply_user_perks_to_form(form, user):
     default_rb, default_edge = LEVEL_PERKS[1]
     form["rakeback_pct"] = float(user.get("rakeback_pct", default_rb))
     form["user_level"] = int(user.get("level", 1))
-    # Do not rewrite fair edge after match stakes are frozen (level-up mid-game).
-    if not form.get("settled_bets"):
-        form["fair_edge"] = float(user.get("fair_edge", default_edge))
-    elif "fair_edge" not in form:
-        form["fair_edge"] = float(user.get("fair_edge", default_edge))
+    # Never rewrite fair edge once this match's stake is frozen or the game is live.
+    if (
+        form.get("settled_bets")
+        or form.get("match_fair_edge") is not None
+        or form.get("game_started")
+        or form.get("game_state")
+    ):
+        if "fair_edge" not in form:
+            form["fair_edge"] = float(user.get("fair_edge", default_edge))
+        return
+    form["fair_edge"] = float(user.get("fair_edge", default_edge))
 
 
 async def attach_user_to_form(form):
@@ -390,7 +396,9 @@ async def record_user_wager_on_game_start(form):
         credit_rakeback=True,
     )
     await _inc_user_daily(user_id, wagered=his_bet_usd)
-    apply_user_perks_to_form(form, user)
+    # Refresh level label only — do not touch fair_edge (match stake already frozen).
+    form["user_level"] = int(user.get("level", 1))
+    form["rakeback_pct"] = float(user.get("rakeback_pct", form.get("rakeback_pct") or 0))
     return user
 
 
