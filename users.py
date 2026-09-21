@@ -208,9 +208,13 @@ def apply_user_perks_to_form(form, user):
     if not form or not user:
         return
     default_rb, default_edge = LEVEL_PERKS[1]
-    form["fair_edge"] = float(user.get("fair_edge", default_edge))
     form["rakeback_pct"] = float(user.get("rakeback_pct", default_rb))
     form["user_level"] = int(user.get("level", 1))
+    # Do not rewrite fair edge after match stakes are frozen (level-up mid-game).
+    if not form.get("settled_bets"):
+        form["fair_edge"] = float(user.get("fair_edge", default_edge))
+    elif "fair_edge" not in form:
+        form["fair_edge"] = float(user.get("fair_edge", default_edge))
 
 
 async def attach_user_to_form(form):
@@ -412,13 +416,13 @@ async def record_user_profit_on_game_end(form, self_won):
     Cash games: +house stake on win, −their stake on loss.
     Rakeback games: +house stake on win only (losses do not reduce profit).
     """
-    from bets import get_bet_info, is_rakeback_bet
+    from bets import get_match_bets
 
     user_id = form.get("ticket_user_id")
     if not user_id:
         return None
-    his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
-    if is_rakeback_bet(form):
+    his_bet_usd, my_bet_usd, _coin, rakeback = get_match_bets(form)
+    if rakeback:
         if self_won:
             return await ensure_user(user_id)
         delta = round(my_bet_usd, 2)

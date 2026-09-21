@@ -91,7 +91,7 @@ FORM_QUESTIONS = [
 2. `Coinflip`
 
 -# @mention
--!setplayer <@user|user_id> to set a new player
+-# !setplayer <@user|user_id> to set a new player
 """,
         "mapping": {
             "dice": ["1", "dice", "dices", ":game_die:", ":dices:", "d", "roll"],
@@ -110,12 +110,12 @@ FORM_QUESTIONS = [
 6. `Fair — {fair_pct}% LOWER Bet (FT1 / FT3 / FT5)`
 """,
         "mapping": {
-            "7s": ["1"],
-            "7s_ties": ["2"],
-            "plus1": ["3"],
-            "lead": ["4"],
-            "ties": ["5"],
-            "fair": ["6"],
+            "7s": ["1", "7s"],
+            "7s_ties": ["2", "7s ties"],
+            "plus1": ["3", "+1 on rolls", "plus1"],
+            "lead": ["4", "lead", "l", "1-0 lead"],
+            "ties": ["5", "ties", "t"],
+            "fair": ["6", "fair", "f"],
         },
         "only_for": ["dice"],
         "short_key": "gamemode"
@@ -127,7 +127,7 @@ FORM_QUESTIONS = [
 2. `Fair — {fair_pct}% LOWER Bet (FT1 / FT3 / FT5)`
 """,
         "mapping": {
-            "lead": ["1", "lead", "l"],
+            "lead": ["1", "lead", "l", "1-0 lead"],
             "fair": ["2", "fair", "f"],
         },
         "only_for": ["coinflip"],
@@ -136,14 +136,14 @@ FORM_QUESTIONS = [
     {
         "type": "choice",
         "text": """🔢 **First to how many?**
-1. `FT3
-2. `FT2
+1. `FT3`
+2. `FT2`
 3. `Random`
 """,
         "mapping": {
-            "ft3": ["1"],
-            "ft2": ["2"],
-            "random": ["3"],
+            "ft3": ["1", "ft3"],
+            "ft2": ["2", "ft2"],
+            "random": ["3", "random", "r"],
         },
         "only_for_gamemode": ["lead", "lead_10"],
         "short_key": "first_to"
@@ -157,10 +157,10 @@ FORM_QUESTIONS = [
 4. `Random`
 """,
         "mapping": {
-            "ft1": ["1"],
-            "ft3": ["2"],
-            "ft5": ["3"],
-            "random": ["4"],
+            "ft1": ["1", "ft1"],
+            "ft3": ["2", "ft3"],
+            "ft5": ["3", "ft5"],
+            "random": ["4", "random", "r"],
         },
         "only_for_gamemode": ["fair"],
         "short_key": "first_to"
@@ -173,9 +173,9 @@ FORM_QUESTIONS = [
 3. `Random`
 """,
         "mapping": {
-            "ft3": ["1"],
-            "ft5": ["2"],
-            "random": ["3"]
+            "ft3": ["1", "ft3"],
+            "ft5": ["2", "ft5"],
+            "random": ["3", "random", "r"],
         },
         "only_for": ["dice", "coinflip"],
         "skip_for_gamemode": ["lead", "lead_10", "fair"],

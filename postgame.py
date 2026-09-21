@@ -23,9 +23,9 @@ from forms import build_confirm_text, ticket_mention
 from message_queue import reply_message, send_channel
 
 RERUN_TIMEOUT_SECONDS = 180
-GAME_NUMBER_PATTERN = re.compile(r"Game #(\d+)", re.IGNORECASE)
-GAME_NUMBER_SCAN_LIMIT = 50
-_cached_game_number = None
+GAME_NUMBER_PATTERN = re.compile(r"Game\s*#(\d+)", re.IGNORECASE)
+GAME_NUMBER_SCAN_LIMIT = 10
+_game_number_lock = asyncio.Lock()
 
 
 def _parse_game_number(content):
@@ -35,34 +35,33 @@ def _parse_game_number(content):
     return int(match.group(1)) if match else None
 
 
-async def get_next_game_number(guild, bot=None):
-    global _cached_game_number
-    if _cached_game_number is not None:
-        _cached_game_number += 1
-        return _cached_game_number
-
-    channel = guild.get_channel(config.GAME_LOG_CHANNEL_ID)
+async def _read_latest_logged_game_number(guild, bot=None):
+    """Most recent `Game #N` in GAME_LOG_CHANNEL (history is newest-first)."""
+    channel = guild.get_channel(config.GAME_LOG_CHANNEL_ID) if guild else None
     if channel is None and bot is not None:
         try:
             channel = await bot.fetch_channel(config.GAME_LOG_CHANNEL_ID)
         except Exception:
             channel = None
     if channel is None:
-        _cached_game_number = 1
-        return 1
+        return None
 
     async for message in channel.history(limit=GAME_NUMBER_SCAN_LIMIT):
         game_num = _parse_game_number(message.content)
         if game_num is not None:
-            _cached_game_number = game_num + 1
-            return _cached_game_number
+            return game_num
+    return None
 
-    _cached_game_number = 1
-    return 1
+
+async def get_next_game_number(guild, bot=None):
+    """Next id = latest Game # in the log channel + 1."""
+    async with _game_number_lock:
+        logged = await _read_latest_logged_game_number(guild, bot)
+        return (logged or 0) + 1
 
 
 async def _get_guild_channel(guild, channel_id, bot=None):
-    channel = guild.get_channel(channel_id)
+    channel = guild.get_channel(channel_id) if guild else None
     if channel is None and bot is not None:
         try:
             channel = await bot.fetch_channel(channel_id)
@@ -81,10 +80,11 @@ async def post_victory_message(guild, form, bot=None):
 
 
 async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=None):
-    game_num = await get_next_game_number(ticket_channel.guild, bot)
+    from bets import get_match_bets, get_match_his_display
+
     mention = ticket_mention(ticket_channel, form)
-    his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
-    his_display = format_bet_display(display_his_bet_usd(form))
+    _his_bet_usd, my_bet_usd, _coin, _rakeback = get_match_bets(form)
+    his_display = format_bet_display(get_match_his_display(form))
     my_bet = format_bet_display(my_bet_usd)
 
     if self_won:
@@ -100,42 +100,81 @@ async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=Non
         if game == "coinflip"
         else "<:Dices:1259259866254676049>"
     )
-    text = (
-        f"Game #{game_num} <:dahoodcasino:1259258576015458426>\n"
-        f"{game_emoji}\n"
-        f"{winner} overtakes {loser}\n"
-        f"{winner_bet}v{loser_bet}"
-    )
-    await send_channel(ticket_channel, text)
+
+    guild = ticket_channel.guild
+    log_channel = await _get_guild_channel(guild, config.GAME_LOG_CHANNEL_ID, bot)
+
+    # Assign + post under one lock so the next game always sees this log first.
+    async with _game_number_lock:
+        logged = await _read_latest_logged_game_number(guild, bot)
+        game_num = (logged or 0) + 1
+        text = (
+            f"Game #{game_num} <:dahoodcasino:1259258576015458426>\n"
+            f"{game_emoji}\n"
+            f"{winner} overtakes {loser}\n"
+            f"{winner_bet}v{loser_bet}"
+        )
+        if log_channel is not None:
+            await send_channel(log_channel, text)
+        else:
+            print(f"[announce] GAME_LOG_CHANNEL_ID missing/unavailable; using #{game_num}")
+            await send_channel(ticket_channel, text)
+            return
+
+    # Mirror to ticket outside the lock (does not affect numbering).
+    if getattr(log_channel, "id", None) != getattr(ticket_channel, "id", None):
+        await send_channel(ticket_channel, text)
 
 
 async def record_winnings(channel, form, self_won):
     from bets import (
         add_player_hold_usd,
         add_self_hold_usd,
-        is_rakeback_bet,
+        get_match_bets,
+        get_player_hold_usd,
+        get_self_hold_usd,
         subtract_self_hold_usd,
         sync_legacy_winnings,
     )
 
-    his_bet_usd, my_bet_usd, coin = get_bet_info(form)
+    if form.get("winnings_recorded"):
+        print(f"[hold] skip duplicate record_winnings ticket={channel.id}")
+        return
+    form["winnings_recorded"] = True
+
+    # Pop stake flags first so a later parse error cannot leave stale state.
+    stake_from_hold = bool(form.pop("stake_from_hold", False))
+    player_stake = float(form.pop("player_stake_from_hold", 0) or 0)
+    # Keep settled_bets through announce / stats (level-up must not rewrite auto-log).
+    his_bet_usd, my_bet_usd, _coin, rakeback = get_match_bets(form)
     sync_legacy_winnings(form)
     form["winnings_coin"] = "ltc"
-    stake_from_hold = form.pop("stake_from_hold", False)
+
+    before_self = get_self_hold_usd(form)
+    before_player = get_player_hold_usd(form)
+
     if self_won:
         # Stake already left self hold at confirm when stake_from_hold; credit full pot back.
-        amount = my_bet_usd if is_rakeback_bet(form) else (my_bet_usd + his_bet_usd)
+        amount = my_bet_usd if rakeback else (my_bet_usd + his_bet_usd)
         add_self_hold_usd(form, amount)
     else:
         # Player won — house stake already deducted at confirm if staked from hold.
         if not stake_from_hold:
             subtract_self_hold_usd(form, my_bet_usd)
-        if is_rakeback_bet(form):
+        if rakeback:
             add_player_hold_usd(form, my_bet_usd)
         else:
             add_player_hold_usd(form, his_bet_usd + my_bet_usd)
+
     sync_winnings_crypto(form)
     save_session_from_form(channel.id, form)
+    print(
+        f"[hold] ticket={channel.id} self_won={self_won} "
+        f"stake_from_hold={stake_from_hold} player_stake={player_stake} "
+        f"bets={my_bet_usd}v{his_bet_usd} "
+        f"self {before_self:.2f}->{get_self_hold_usd(form):.2f} "
+        f"player {before_player:.2f}->{get_player_hold_usd(form):.2f}"
+    )
 
 
 async def send_rerun_shortfall_before_confirm(channel, form):
@@ -180,9 +219,28 @@ async def send_rerun_shortfall_before_confirm(channel, form):
     await send_channel(
         channel,
         f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` for rerun "
-        f"(`{format_matchup(form)}`) — added to self hold",
+        f"(`{format_matchup(form)}`)",
     )
     return True
+
+
+def lock_settled_bets(form, *, my_bet_usd=None, his_bet_usd=None):
+    """Freeze match stake amounts for settlement / auto-log (immune to later form edits)."""
+    from bets import display_his_bet_usd, is_rakeback_bet
+
+    live_his, live_my, _coin = get_bet_info(form)
+    if his_bet_usd is None:
+        his_bet_usd = live_his
+    if my_bet_usd is None:
+        my_bet_usd = live_my
+    form["settled_bets"] = {
+        "his_bet_usd": round(float(his_bet_usd or 0), 2),
+        "my_bet_usd": round(float(my_bet_usd or 0), 2),
+        "his_display_usd": round(float(display_his_bet_usd(form) or 0), 2),
+        "rakeback": bool(is_rakeback_bet(form)),
+        "fair_edge": float(form.get("fair_edge", 0.10) or 0.10),
+    }
+    return form["settled_bets"]
 
 
 async def apply_hold_after_confirm(channel, form):
@@ -192,11 +250,10 @@ async def apply_hold_after_confirm(channel, form):
     wager_usd = form.pop("pending_wager_usd", None)
     if wager_usd is None:
         wager_usd = get_wager_usd(form)
-    coin = "ltc"
     planned = float(form.pop("pending_hold_deduct", 0) or 0)
     sync_legacy_winnings(form)
     available = get_self_hold_usd(form)
-    deduct = round(min(planned, available, wager_usd), 2)
+    deduct = round(min(planned, available, float(wager_usd or 0)), 2)
     deducted = 0.0
 
     if deduct > 0:
@@ -206,6 +263,8 @@ async def apply_hold_after_confirm(channel, form):
 
     form.pop("rerun_shortfall_sent", None)
     form["stake_from_hold"] = deducted > 0
+    # Freeze the funded house stake (not a post-level-up recalculation).
+    lock_settled_bets(form, my_bet_usd=float(wager_usd or 0))
     add_wagered_usd(form, wager_usd)
     sync_winnings_crypto(form)
     save_session_from_form(channel.id, form)
@@ -319,6 +378,15 @@ async def payout_winnings_if_any(channel, form, *, always_post_address=False):
 
 
 async def end_game(channel, form, self_won, bot_user, bot=None):
+    # Only settle a match once — concurrent score races must not credit both sides.
+    if form.get("match_settled"):
+        print(
+            f"[end_game] ignored duplicate settle ticket={channel.id} "
+            f"self_won={self_won} (already settled)"
+        )
+        return
+    form["match_settled"] = True
+
     # Persist completed match rules for future !rerun before clearing state.
     responses = form.get("responses") or {}
     if responses:
@@ -401,7 +469,7 @@ async def prompt_rerun_bet(channel, form, bot_user):
         channel,
         f"💸 {mention} **How much would you like to bet for the rerun?**\n\n"
         f'**Example:** "5 {coin}", "10 litecoin", or `"rakeback"` / `"rb"` '
-        f"(MIN: __$1__ | MAX: __${max_bet}__)\n"
+        f"(MIN: __$5__ | MAX: __${max_bet}__)\n"
         f"-# Same rules as last completed match.",
     )
     save_session_from_form(channel.id, form)

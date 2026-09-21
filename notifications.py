@@ -2,7 +2,7 @@ import traceback
 from datetime import datetime
 
 import config
-from bets import display_his_bet_usd, format_bet_display, get_bet_info, is_rakeback_bet
+from bets import format_bet_display
 from message_queue import send_user
 from services import db, get_house_balance_usd
 
@@ -49,19 +49,19 @@ async def notify_admin_ticket_added(bot, channel):
 
 
 async def notify_admin_game_started(bot, channel, form):
-    his_bet_usd, my_bet_usd, coin = get_bet_info(form)
-    their_display = display_his_bet_usd(form)
+    from bets import get_match_bets, get_match_his_display
+
+    his_bet_usd, my_bet_usd, coin, rakeback = get_match_bets(form)
+    their_display = get_match_his_display(form)
     responses = form.get("responses", {})
     gm_key = responses.get("gamemode", "fair")
     gamemode = GAMEMODE_LABELS.get(gm_key, gm_key)
     first_to = responses.get("first_to")
     if first_to and gm_key in ("lead", "lead_10", "fair"):
         gamemode = f"{gamemode} {str(first_to).upper()}"
-    coin_label = coin.upper()
-    # Real stake for house P/L; display their side as 0 when using rakeback.
-    profit_on_win = my_bet_usd - his_bet_usd
+    coin_label = (coin or "ltc").upper()
     their_line = f"**Their bet:** `${format_bet_display(their_display)}` {coin_label}"
-    if is_rakeback_bet(form):
+    if rakeback:
         their_line += f" _(rakeback stake `${format_bet_display(his_bet_usd)}`)_"
     await _send_admin_dm(
         bot,
@@ -69,7 +69,7 @@ async def notify_admin_game_started(bot, channel, form):
         f"**Channel:** {_channel_label(channel)}\n"
         f"**Gamemode:** {gamemode}\n"
         f"**Your bet:** `${format_bet_display(my_bet_usd)}` {coin_label}\n"
-        f"{their_line}\n"
+        f"{their_line}\n",
     )
 
 

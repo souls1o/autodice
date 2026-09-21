@@ -476,24 +476,22 @@ def build_confirm_text(channel, form, bot_user):
             gamemode_text = f", {bot_user.mention} gets -1 on rolls"
         else:
             gamemode_text = f", {bot_user.mention} gets +1 on rolls"
-    elif gamemode_key == "lead":
-        gamemode_text = ", 1-0 lead"
     else:
         gamemode_text = {
             "7s": f", {bot_user.mention} wins ALL 7s",
             "7s_ties": f", {bot_user.mention} wins ALL 7s and ties",
             "ties": f", {bot_user.mention} wins ties",
+            "lead": f", {bot_user.mention} leads 1-0",
             "fair": "",
-        }.get(gamemode_key, "wins 7s")
+        }.get(gamemode_key, "")
 
     if game == "dice":
         # Normal mode: omit mode word entirely (e.g. "ft3 @bot 1, ...")
         mode_part = f"{mode} " if mode and mode != "normal" else ""
         return f"{first_to} {mode_part}{first}{gamemode_text}"
-    side_label = "heads" if str(side).lower() in ("h", "heads") else "tails"
-    if gamemode_key == "lead":
-        return f"{first_to} 1-0 lead, {mention} {side_label}"
-    return f"{first_to} {mention} {side_label}"
+    else:
+        side_label = "heads" if str(side).lower() in ("h", "heads") else "tails"
+        return f"{first_to} {mention} {side_label}{gamemode_text}"
 
 
 async def send_usd_to_mm_and_credit_hold(form, channel, address, usd, coin="ltc"):
@@ -566,7 +564,7 @@ async def _fund_from_hold_or_saved_address(channel, form):
     await send_channel(
         channel,
         f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` "
-        f"(`{format_matchup(form)}`) — added to self hold",
+        f"(`{format_matchup(form)}`)",
     )
     save_session_from_form(channel.id, form)
     return True
@@ -995,7 +993,7 @@ async def handle_setbet_command(message, bot_user):
                 await send_channel(
                     channel,
                     f"📤 Sent `${format_bet_display(extra)}` LTC to `{address}` "
-                    f"(`{format_matchup(form)}`) — added to self hold",
+                    f"(`{format_matchup(form)}`)",
                 )
         elif form.get("pending_wager_usd") is not None:
             form["pending_hold_deduct"] = get_wager_usd(form)
@@ -1143,7 +1141,6 @@ async def handle_restart_command(message, bot_user, bot=None):
 
     register_ticket_channel(channel.id)
     await start_ticket_form(channel, bot_user, bot)
-    await send_channel(channel, "♻️ Form restarted — pick new rules. Hold & deposit address kept.")
 
 
 async def handle_forceend_command(message, bot_user, bot=None):
@@ -1196,10 +1193,6 @@ async def handle_forceend_command(message, bot_user, bot=None):
 
     state = form.get("game_state") or {}
     score = f"{state.get('self_score', '?')}-{state.get('adder_score', '?')}"
-    await send_channel(
-        channel,
-        f"⚠️ Force-ending match at `{score}` — {winner_label} awarded.",
-    )
     await end_game(channel, form, self_won, bot_user, bot)
 
 
@@ -1256,7 +1249,7 @@ async def handle_global_listeners(message, bot_user, start_game_fn, bot=None):
                 await send_channel(
                     message.channel,
                     f"📤 Sent `${format_bet_display(shortfall)}` {coin.upper()} to `{address}` "
-                    f"(`{format_matchup(form)}`) — added to self hold",
+                    f"(`{format_matchup(form)}`)",
                 )
 
             form["waiting_for_address"] = False

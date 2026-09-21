@@ -13,6 +13,15 @@ from notifications import notify_admin_game_started
 
 DA_HOOD_BOT_ID = 1200925985999171706
 ROLL_EMBED_PATTERN = re.compile(r"(\d+)\s*(?:&|\+)\s*(\d+)")
+_score_locks = {}
+
+
+def _score_lock(channel_id):
+    lock = _score_locks.get(channel_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _score_locks[channel_id] = lock
+    return lock
 
 
 async def get_ticket_channel(bot, form, fallback=None):
@@ -358,38 +367,51 @@ def _pair_winner(me_total, you_total, gamemode, roll_mode):
 
 
 async def _score_pair(roll_channel, form, bot_user, bot, me_total, you_total, *, continue_batch=False):
+    if form.get("match_settled") or "game_state" not in form:
+        return True
     state = form["game_state"]
-    state["scoring"] = True
-    try:
-        me_total = _apply_bot_roll_bonus(me_total, state["gamemode"], state["mode"])
-        winner = _pair_winner(me_total, you_total, state["gamemode"], state["mode"])
-        ticket_channel = await get_ticket_channel(bot, form, fallback=roll_channel)
+    ticket_channel = await get_ticket_channel(bot, form, fallback=roll_channel)
+    lock = _score_lock(getattr(ticket_channel, "id", None) or form.get("ticket_channel_id") or 0)
 
-        if winner == "me":
-            state["self_score"] += 1
-        elif winner == "you":
-            state["adder_score"] += 1
-
-        first_to = state["first_to"]
-        if state["self_score"] >= first_to or state["adder_score"] >= first_to:
-            await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
-            self_won = state["self_score"] >= first_to
-            winner_id = bot_user.id if self_won else form["ticket_user_id"]
-            await end_game(ticket_channel, form, self_won, bot_user, bot)
+    async with lock:
+        if form.get("match_settled") or form.get("game_state") is not state:
             return True
 
-        if continue_batch:
-            await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
-            return False
+        state["scoring"] = True
+        try:
+            me_total = _apply_bot_roll_bonus(me_total, state["gamemode"], state["mode"])
+            winner = _pair_winner(me_total, you_total, state["gamemode"], state["mode"])
 
-        # Post score while still scoring-locked so mid-score rolls are ignored
-        await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
-        _reset_round_state(state)
-        state["scoring"] = False
+            if winner == "me":
+                state["self_score"] += 1
+            elif winner == "you":
+                state["adder_score"] += 1
+
+            first_to = state["first_to"]
+            if state["self_score"] >= first_to or state["adder_score"] >= first_to:
+                await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
+                self_won = state["self_score"] >= first_to
+                await end_game(ticket_channel, form, self_won, bot_user, bot)
+                return True
+
+            if continue_batch:
+                await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
+                return False
+
+            # Post score while still scoring-locked so mid-score rolls are ignored
+            await send_channel(ticket_channel, f"`{state['self_score']}-{state['adder_score']}`")
+            _reset_round_state(state)
+            state["scoring"] = False
+            # Release lock before starting next roll so bot embed can score.
+        finally:
+            if form.get("game_state") is state and not form.get("match_settled"):
+                state["scoring"] = False
+
+    if form.get("match_settled") or "game_state" not in form:
+        return True
+    if not continue_batch:
         await _start_next_round(roll_channel, form, bot_user, bot)
-        return False
-    finally:
-        state["scoring"] = False
+    return False
 
 
 async def do_next_roll(roll_channel, form, bot_user, bot):
@@ -506,7 +528,7 @@ async def _handle_user_roll_embed(message, form, bot_user, bot, cmd, total):
     state = form["game_state"]
     ticket_user_id = form["ticket_user_id"]
 
-    if state.get("scoring"):
+    if form.get("match_settled") or state.get("scoring"):
         return
 
     # Pair against a pending bot-first total (only accepted/pending rolls).
@@ -557,7 +579,8 @@ async def _handle_user_roll_embed(message, form, bot_user, bot, cmd, total):
 
 async def _handle_bot_roll_embed(message, form, bot_user, bot, cmd, total):
     state = form["game_state"]
-    ticket_user_id = form["ticket_user_id"]
+    if form.get("match_settled") or state.get("scoring"):
+        return
 
     # Only accept the embed for the -roll we actually just sent
     pending_cmd_id = state.get("pending_bot_roll_cmd_id")
@@ -672,6 +695,8 @@ async def drain_cf_pairs(channel, form, bot_user, bot):
                 await send_channel(ticket_channel, line)
 
             if game_over:
+                if form.get("match_settled"):
+                    return
                 self_won = state["self_score"] >= int(state.get("first_to") or 2)
                 await end_game(ticket_channel, form, self_won, bot_user, bot)
                 return
@@ -704,6 +729,9 @@ async def start_game(channel, form, bot_user, bot=None):
         form["waiting_for_confirm"] = False
         return
     form.pop("player_confirmed", None)
+    form.pop("match_settled", None)
+    form.pop("winnings_recorded", None)
+    form.pop("settled_bets", None)
 
     # Debit rakeback before hold; refund if hold apply fails.
     ok, err, rb_debited = await debit_rakeback_stake_for_form(form)
@@ -719,6 +747,10 @@ async def start_game(channel, form, bot_user, bot=None):
                 await credit_rakeback(form["ticket_user_id"], rb_debited)
             await payout_winnings_if_any(channel, form)
             return
+    else:
+        # No hold apply path (e.g. testing) — still freeze stakes for settlement.
+        from postgame import lock_settled_bets
+        lock_settled_bets(form)
 
     from bets import apply_player_hold_stake
     apply_player_hold_stake(form)

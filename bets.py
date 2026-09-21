@@ -156,10 +156,13 @@ def _lead_house_bet(his_bet, first_to):
 
 def calculate_my_bet(form):
     responses = form.get("responses", {})
-    try:
-        his_bet = float(responses.get("bet", "0").split()[0])
-    except (ValueError, IndexError):
-        his_bet = 0.0
+    if is_rakeback_bet(form):
+        his_bet = player_rakeback_stake_usd(form)
+    else:
+        try:
+            his_bet = float(str(responses.get("bet", "0")).split()[0])
+        except (ValueError, IndexError, TypeError):
+            his_bet = 0.0
 
     game = responses.get("game")
     first_to = responses.get("first_to")
@@ -199,15 +202,51 @@ def calculate_my_bet(form):
 
 
 def get_bet_info(form):
+    """Return (player_bet_usd, house_bet_usd, coin). Safe for rakeback bets."""
+    if is_rakeback_bet(form):
+        his_bet_usd = player_rakeback_stake_usd(form)
+        my_bet_usd = calculate_my_bet(form) or 0.0
+        return round(float(his_bet_usd or 0), 2), round(float(my_bet_usd or 0), 2), "ltc"
+
     raw = (form.get("responses", {}).get("bet") or "0 ltc").strip()
     parts = raw.split()
-    his_bet_usd = float(parts[0])
-    if len(parts) >= 2 and parts[-1].lower() == "rakeback":
-        coin = "ltc"
-    else:
-        coin = "ltc"
+    try:
+        his_bet_usd = float(parts[0]) if parts else 0.0
+    except (TypeError, ValueError):
+        his_bet_usd = 0.0
     my_bet_usd = calculate_my_bet(form) or 0.0
-    return his_bet_usd, my_bet_usd, coin
+    return round(his_bet_usd, 2), round(float(my_bet_usd or 0), 2), "ltc"
+
+
+def get_match_bets(form):
+    """
+    Stakes for the active/just-finished match.
+    Prefers amounts frozen at confirm so mid-match level/perk changes cannot
+    rewrite fair house edge (or auto-log / settlement).
+    Returns (his_bet_usd, my_bet_usd, coin, rakeback).
+    """
+    settled = (form or {}).get("settled_bets") or {}
+    if settled:
+        return (
+            round(float(settled.get("his_bet_usd") or 0), 2),
+            round(float(settled.get("my_bet_usd") or 0), 2),
+            "ltc",
+            bool(settled.get("rakeback")),
+        )
+    his_bet_usd, my_bet_usd, coin = get_bet_info(form)
+    return (
+        round(float(his_bet_usd or 0), 2),
+        round(float(my_bet_usd or 0), 2),
+        coin or "ltc",
+        is_rakeback_bet(form),
+    )
+
+
+def get_match_his_display(form):
+    settled = (form or {}).get("settled_bets") or {}
+    if settled:
+        return round(float(settled.get("his_display_usd", settled.get("his_bet_usd") or 0)), 2)
+    return display_his_bet_usd(form)
 
 
 def normalize_bet_response(response):
@@ -493,5 +532,5 @@ def bet_validator(response, form=None):
     except ValueError:
         return False
     if not form:
-        return 1 <= amount <= 50
-    return 1 <= amount <= get_max_bet(form)
+        return 5 <= amount <= 50
+    return 5 <= amount <= get_max_bet(form)

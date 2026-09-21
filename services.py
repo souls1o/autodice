@@ -239,13 +239,13 @@ def _add_unique_user(period_entry, user_id):
 
 
 async def track_stats(form, self_won):
-    from bets import is_rakeback_bet
+    from bets import get_match_bets
 
-    his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
+    his_bet_usd, my_bet_usd, _coin, rakeback = get_match_bets(form)
     # House/self stake only — not combined with the player's side.
     wagered = round(my_bet_usd, 2)
     # Rakeback: player puts up no cash — self win is $0 profit; player win = −house stake.
-    if is_rakeback_bet(form):
+    if rakeback:
         profit = 0.0 if self_won else round(-my_bet_usd, 2)
     else:
         profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
@@ -318,14 +318,13 @@ def _history_gamemode_label(form):
 
 async def record_game_history(form, self_won):
     """Persist one finished game for player !history lookup."""
-    from bets import is_rakeback_bet
+    from bets import get_match_bets
 
     user_id = form.get("ticket_user_id")
     if not user_id:
         return
 
-    his_bet_usd, my_bet_usd, coin = get_bet_info(form)
-    rakeback = is_rakeback_bet(form)
+    his_bet_usd, my_bet_usd, coin, rakeback = get_match_bets(form)
     if rakeback:
         player_profit = 0.0 if self_won else round(my_bet_usd, 2)
         wagered = 0.0
@@ -419,17 +418,17 @@ async def build_history_text(discord_id, page=1):
 
 async def track_ticket_game(form, self_won):
     """Accumulate per-ticket game totals for admin !ticket lookup."""
-    from bets import is_rakeback_bet
+    from bets import get_match_bets
     from datetime import datetime
 
     channel_id = form.get("ticket_channel_id")
     if not channel_id:
         return
 
-    his_bet_usd, my_bet_usd, _coin = get_bet_info(form)
-    player_wagered = 0.0 if is_rakeback_bet(form) else round(his_bet_usd, 2)
+    his_bet_usd, my_bet_usd, _coin, rakeback = get_match_bets(form)
+    player_wagered = 0.0 if rakeback else round(his_bet_usd, 2)
     bot_wagered = round(my_bet_usd, 2)
-    if is_rakeback_bet(form):
+    if rakeback:
         profit = 0.0 if self_won else round(-my_bet_usd, 2)
     else:
         profit = round(his_bet_usd if self_won else -my_bet_usd, 2)
@@ -797,8 +796,7 @@ async def _apply_inbound_hold_deduction(bot, address, meta, coin_amount, coin, d
             try:
                 await send_channel(
                     channel,
-                    f"📥 Received `${deducted:.2f}` on `{address}` — "
-                    f"deducted from self hold.",
+                    f"📥 Received `${deducted:.2f}` on `{address}`"
                 )
             except Exception:
                 pass
