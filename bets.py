@@ -8,47 +8,50 @@ COIN_MAP = {
     "bitcoin": "btc", "btc": "btc",
     "ethereum": "eth", "eth": "eth",
     "litecoin": "ltc", "ltc": "ltc",
+    "solana": "sol", "sol": "sol",
 }
 
-COINGECKO_IDS = {"btc": "bitcoin", "eth": "ethereum", "ltc": "litecoin"}
+COINGECKO_IDS = {
+    "btc": "bitcoin",
+    "eth": "ethereum",
+    "ltc": "litecoin",
+    "sol": "solana",
+}
 UNITS = {
     "btc": 100_000_000,
     "eth": 10**18,
     "ltc": 100_000_000,
-    # Apirone stablecoin smallest units (1 USD = 1 token).
+    "sol": 1_000_000_000,
+    # Stablecoin smallest units (1 USD ≈ 1 token).
     "usdt@eth": 10**6,
     "usdc@eth": 10**6,
     "usdt@bnb": 10**18,
     "usdc@bnb": 10**18,
-    "usdt@trx": 10**6,
-    "usdc@trx": 10**6,
-    "usdt@ton": 10**6,
+    "usdt@sol": 10**6,
+    "usdc@sol": 10**6,
 }
 
 STABLECOINS = {
     "usdt@eth", "usdc@eth",
     "usdt@bnb", "usdc@bnb",
-    "usdt@trx", "usdc@trx",
-    "usdt@ton",
+    "usdt@sol", "usdc@sol",
 }
 
-WITHDRAW_COINS = {"btc", "eth", "ltc"} | STABLECOINS
+WITHDRAW_COINS = {"ltc", "eth", "sol"} | STABLECOINS
 
 _STABLE_ALIASES = {
     "usdteth": "usdt@eth",
     "usdt-eth": "usdt@eth",
-    "usdcbnb": "usdc@bnb",
-    "usdc-bnb": "usdc@bnb",
     "usdceth": "usdc@eth",
     "usdc-eth": "usdc@eth",
     "usdtbnb": "usdt@bnb",
     "usdt-bnb": "usdt@bnb",
-    "usdttrx": "usdt@trx",
-    "usdt-trx": "usdt@trx",
-    "usdctrx": "usdc@trx",
-    "usdc-trx": "usdc@trx",
-    "usdtton": "usdt@ton",
-    "usdt-ton": "usdt@ton",
+    "usdcbnb": "usdc@bnb",
+    "usdc-bnb": "usdc@bnb",
+    "usdtsol": "usdt@sol",
+    "usdt-sol": "usdt@sol",
+    "usdcsol": "usdc@sol",
+    "usdc-sol": "usdc@sol",
 }
 
 _BECH32_CHARS = r"qpzry9x8gf2tvdw0s3jn54khce6mua7l"
@@ -60,10 +63,22 @@ _ADDRESS_PATTERNS = {
     "eth": (
         re.compile(r"(0x[a-fA-F0-9]{40})"),
     ),
+    "bnb": (
+        re.compile(r"(0x[a-fA-F0-9]{40})"),
+    ),
     "ltc": (
         re.compile(rf"(ltc1[{_BECH32_CHARS}]{{25,87}})", re.IGNORECASE),
         re.compile(r"([LM3][1-9A-HJ-NP-Za-km-z]{26,33})"),
     ),
+    "sol": (
+        re.compile(r"([1-9A-HJ-NP-Za-km-z]{32,44})"),
+    ),
+    "usdt@eth": (re.compile(r"(0x[a-fA-F0-9]{40})"),),
+    "usdc@eth": (re.compile(r"(0x[a-fA-F0-9]{40})"),),
+    "usdt@bnb": (re.compile(r"(0x[a-fA-F0-9]{40})"),),
+    "usdc@bnb": (re.compile(r"(0x[a-fA-F0-9]{40})"),),
+    "usdt@sol": (re.compile(r"([1-9A-HJ-NP-Za-km-z]{32,44})"),),
+    "usdc@sol": (re.compile(r"([1-9A-HJ-NP-Za-km-z]{32,44})"),),
 }
 
 _PRICE_CACHE = {}
@@ -467,6 +482,8 @@ def _schedule_price_refresh():
 
 def get_price(coin):
     coin = coin.lower()
+    if coin in STABLECOINS:
+        return 1.0
     if coin not in COINGECKO_IDS:
         raise ValueError(f"Unsupported coin: {coin}")
 
@@ -490,6 +507,8 @@ def get_price(coin):
 
 async def get_price_async(coin):
     coin = coin.lower()
+    if coin in STABLECOINS:
+        return 1.0
     if coin not in COINGECKO_IDS:
         raise ValueError(f"Unsupported coin: {coin}")
     if _prices_fresh() and coin in _PRICE_CACHE:

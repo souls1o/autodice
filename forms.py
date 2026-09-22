@@ -26,7 +26,7 @@ from bets import (
     sync_winnings_crypto,
     usd_to_smallest_unit,
 )
-from services import apirone_transfer_error, send_apirone
+from services import transfer_error, send_crypto
 from notifications import notify_admin_ticket_added
 from message_queue import reply_message, send_channel, send_user
 from state import (
@@ -102,7 +102,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
         "`!housebal` / `!hb` — house balance in USD",
         "",
         "**🎫 Ticket commands**",
-        "`!ltc` / `!eth` / `!sol` — get a deposit address",
+        "`!ltc` / `!eth` / `!sol` — deposit address (ETH/SOL also accept USDT/USDC)",
         "`!hold` — show current winnings for this ticket",
         "`!profile` [user_id] — wagered, profit, level & perks",
         "`!rerun` — rerun last completed match (new bet amount)",
@@ -126,7 +126,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "**🔧 Admin**",
             "`!stats` — wagered, profit, games, and house balance",
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
-            "`!withdraw <coin> <address> <usd>` — Apirone send (`btc`/`eth`/`ltc`/`usdt@eth`/…)",
+            "`!withdraw <coin> <address> <usd>` — house send (`ltc`/`eth`/`sol`/`usdt@eth`/…)",
             "`!wallet` — wallet addresses",
             "`!toggle maintenance` — pause tickets & auto-post",
             "`!setchannel <id>` — set auto-post channel",
@@ -513,8 +513,8 @@ async def send_usd_to_mm_and_credit_hold(form, channel, address, usd, coin="ltc"
         return False, "Could not price transfer."
     if amount <= 0:
         return False, "Amount too small to send."
-    result = await send_apirone(coin, address, amount)
-    err = apirone_transfer_error(result)
+    result = await send_crypto(coin, address, amount)
+    err = transfer_error(result)
     if err:
         return False, err
     add_self_hold_usd(form, usd)
@@ -762,18 +762,18 @@ async def handle_ticket_command(message, bot_user, bot=None):
     if content in COIN_ADDRESS_COMMANDS:
         coin = COIN_ADDRESS_COMMANDS[content]
         label = coin.upper()
-        if coin == "sol":
-            address = getattr(config, "SOL_DEPOSIT_ADDRESS", None) or None
-        elif coin == "eth":
-            address = getattr(config, "ETH_DEPOSIT_ADDRESS", None) or None
-        else:
-            from postgame import get_or_create_ticket_house_address
-            address = await get_or_create_ticket_house_address(message.channel, get_form(message.channel.id), coin)
+        from postgame import get_or_create_ticket_house_address, post_payout_address
+
+        address = await get_or_create_ticket_house_address(
+            message.channel, get_form(message.channel.id), coin
+        )
         if address:
-            from postgame import post_payout_address
             await post_payout_address(message.channel, address, coin)
         else:
-            await send_channel(message.channel, f"❌ Failed to generate {label} address.")
+            await send_channel(
+                message.channel,
+                f"❌ Failed to generate {label} address (check HOUSE_MNEMONIC / RPC).",
+            )
         return True
 
     if content == "!restart":

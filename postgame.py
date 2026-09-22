@@ -17,7 +17,7 @@ from bets import (
     usd_to_crypto_amount,
 )
 from notifications import notify_admin_game_result
-from services import create_apirone_address, track_stats
+from services import create_deposit_address, track_stats
 from state import cancel_rerun_timeout, finish_form, get_form, get_ticket_session, save_session_from_form
 from forms import build_confirm_text, ticket_mention
 from message_queue import reply_message, send_channel
@@ -336,14 +336,13 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
 
 
 async def get_or_create_ticket_house_address(channel, form=None, coin="ltc"):
-    """One house receive address per coin per ticket; reused for !ltc / payout / refund."""
+    """One house receive address per coin per ticket; reused for !ltc / !eth / !sol / stables / payout."""
     from state import get_form, get_ticket_session, save_session_from_form
+    from wallet.service import SUPPORTED
 
     coin = (coin or "ltc").lower()
-    if coin == "sol":
-        return getattr(config, "SOL_DEPOSIT_ADDRESS", None) or None
-    if coin == "eth":
-        return getattr(config, "ETH_DEPOSIT_ADDRESS", None) or None
+    if coin not in SUPPORTED:
+        return None
 
     form = form or get_form(channel.id)
     session = get_ticket_session(channel.id)
@@ -355,9 +354,15 @@ async def get_or_create_ticket_house_address(channel, form=None, coin="ltc"):
         if form is not None:
             form["house_deposit_addresses"] = addrs
         session["house_deposit_addresses"] = addrs
+        try:
+            from wallet.registry import register_ticket_address
+
+            await register_ticket_address(coin, existing, channel.id)
+        except Exception:
+            pass
         return existing
 
-    address = await create_apirone_address(coin)
+    address = await create_deposit_address(coin, channel_id=channel.id)
     if not address:
         return None
     addrs[coin] = address

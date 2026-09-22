@@ -896,9 +896,7 @@ async def admin_add_wager(target_user_id, amount_usd):
 def build_mm_ticket_commands_dm():
     return (
         "**🎫 Ticket commands**\n"
-        "`!ltc` / `!btc` / `!eth` — get a deposit address\n"
-        "`!usdt-bnb` / `!usdt-eth` — USDT on BSC / ERC-20\n"
-        "`!usdc-bnb` / `!usdc-eth` — USDC on BSC / ERC-20\n"
+        "`!ltc` / `!eth` / `!sol` — HD deposit address (ETH/SOL also accept USDT/USDC)\n"
         "`!hold` — show current winnings for this ticket\n"
         "`!profile` [user_id] — wagered, profit, level & perks\n"
         "`!setbet <usd>` — set bet (not during an active match)\n"
