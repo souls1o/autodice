@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from wallet.hd import CHANGE_INDEX, address_for, ticket_index
 from wallet import eth as eth_mod
 from wallet import evm_token as evm_token_mod
@@ -9,7 +11,7 @@ from wallet import ltc as ltc_mod
 from wallet import sol as sol_mod
 from wallet import spl_token as spl_token_mod
 from wallet import registry
-from wallet.tokens import STABLECOINS, is_stable, token_info
+from wallet.tokens import STABLECOINS, companion_coins, is_stable, token_info
 
 
 NATIVE = ("ltc", "eth", "sol")
@@ -29,11 +31,13 @@ async def create_address(coin: str, *, channel_id: int | None = None) -> str | N
             return addr
         idx = ticket_index(int(channel_id))
         addr = address_for(coin, idx, change=False)
-        # Register companions so ETH/SOL ticket addrs can hold/spend stables too.
-        from wallet.tokens import companion_coins
-
-        for c in companion_coins(coin):
-            await registry.register_ticket_address(c, addr, int(channel_id))
+        # Register companions in parallel (ETH/SOL share address with stables).
+        await asyncio.gather(
+            *[
+                registry.register_ticket_address(c, addr, int(channel_id))
+                for c in companion_coins(coin)
+            ]
+        )
         return addr
     except Exception as exc:
         print(f"[wallet] create_address({coin}) failed: {exc}")
@@ -71,11 +75,14 @@ async def address_receipts(address: str, coin: str = "ltc") -> list[dict] | None
 
 
 async def _funded_entries(coin: str) -> list[dict]:
-    """Refresh balances, prune $0 USD addresses, return funded registry rows with balances."""
+    """Refresh balances in parallel, prune $0 USD addresses, return funded rows."""
     from bets import STABLECOINS as BET_STABLES, get_price_async
 
     coin = (coin or "").lower()
     rows = await registry.list_registered(coin)
+    if not rows:
+        return []
+
     if coin in BET_STABLES or is_stable(coin):
         price = 1.0
     else:
@@ -84,24 +91,31 @@ async def _funded_entries(coin: str) -> list[dict]:
         except Exception:
             price = 0.0
 
+    addrs = [(row, row.get("address")) for row in rows if row.get("address")]
+    bals = await asyncio.gather(
+        *[address_balance(addr, coin) for _, addr in addrs],
+        return_exceptions=True,
+    )
+
     funded = []
-    for row in rows:
-        addr = row.get("address")
-        if not addr:
+    prune_tasks = []
+    for (row, addr), bal in zip(addrs, bals):
+        if isinstance(bal, Exception) or bal is None:
             continue
-        bal = await address_balance(addr, coin)
-        if bal is None:
-            continue
-        pruned = await registry.prune_zero_usd(coin, addr, bal, price, pending=False)
-        if pruned:
-            continue
-        if bal <= 0:
+        bal = float(bal)
+        # Prune empties without awaiting each delete serially later
+        try:
+            usd = round(bal * float(price or 0), 2) if price > 0 else (0.0 if bal <= 0 else 1.0)
+        except (TypeError, ValueError):
+            usd = 1.0 if bal > 0 else 0.0
+        if bal <= 0 or (price > 0 and usd <= 0):
+            prune_tasks.append(registry.unregister_address(coin, addr))
             continue
         entry = {
             "address": addr,
             "index": int(row.get("index") or 0),
             "change": bool(row.get("change")),
-            "balance": float(bal),
+            "balance": bal,
         }
         if coin == "ltc":
             entry["balance_sats"] = int(round(bal * ltc_mod.UNITS))
@@ -113,6 +127,9 @@ async def _funded_entries(coin: str) -> list[dict]:
             decimals = int(token_info(coin)["decimals"])
             entry["balance_raw"] = int(round(bal * (10**decimals)))
         funded.append(entry)
+
+    if prune_tasks:
+        await asyncio.gather(*prune_tasks, return_exceptions=True)
     return funded
 
 
@@ -152,13 +169,18 @@ async def transfer(coin: str, dest: str, amount_smallest: int) -> dict:
 
 async def account_balance() -> dict:
     """
-    Aggregate balances across non-zero registered addresses.
-    Shape compatible with former Apirone account balance reader:
-    {"balance": [{"currency": "ltc", "total": <smallest>}, ...]}
+    Aggregate balances across non-zero registered addresses (coins in parallel).
+    Shape: {"balance": [{"currency": "ltc", "total": <smallest>}, ...]}
     """
+    funded_by_coin = await asyncio.gather(
+        *[_funded_entries(coin) for coin in SUPPORTED],
+        return_exceptions=True,
+    )
     out = []
-    for coin in SUPPORTED:
-        funded = await _funded_entries(coin)
+    for coin, funded in zip(SUPPORTED, funded_by_coin):
+        if isinstance(funded, Exception):
+            print(f"[wallet] account_balance({coin}) failed: {funded}")
+            funded = []
         if coin == "ltc":
             total = sum(int(e.get("balance_sats") or 0) for e in funded)
         elif coin == "eth":

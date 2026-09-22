@@ -27,7 +27,7 @@ def _rpc_base() -> str:
 
 
 def _get(path: str):
-    r = requests.get(f"{_rpc_base()}{path}", timeout=30)
+    r = requests.get(f"{_rpc_base()}{path}", timeout=12)
     r.raise_for_status()
     if r.headers.get("content-type", "").startswith("application/json") or r.text[:1] in "{[":
         return r.json()

@@ -850,7 +850,7 @@ async def _poll_ticket_deposit_addresses_locked(bot, items, deduct_fn, send_chan
 
 _ACCOUNT_BALANCE_CACHE = None
 _ACCOUNT_BALANCE_AT = 0.0
-_ACCOUNT_BALANCE_TTL = 20.0
+_ACCOUNT_BALANCE_TTL = 45.0
 
 
 async def get_account_balance(*, fresh=False):
@@ -917,11 +917,21 @@ async def get_house_balance_usd():
 
 
 async def get_house_balance_text():
-    data = await get_account_balance(fresh=True)
+    # Prefer warm cache; only force a refresh when empty so !housebal stays snappy.
+    data = await get_account_balance(fresh=_ACCOUNT_BALANCE_CACHE is None)
     if not data:
         return "❌ Could not fetch house balance (check HOUSE_MNEMONIC / RPC URLs)."
     lines = ["**🏦 House Balance**"]
     total_usd = 0.0
+    priced = await asyncio.gather(
+        *[
+            _coin_balance_usd(entry.get("currency", "").lower(), entry.get("total", 0) or 0)
+            for entry in data.get("balance", [])
+            if (entry.get("currency", "").lower() in HOUSE_COINS)
+        ],
+        return_exceptions=True,
+    )
+    idx = 0
     for entry in data.get("balance", []):
         coin = entry.get("currency", "").lower()
         if coin not in HOUSE_COINS:
@@ -929,11 +939,15 @@ async def get_house_balance_text():
         smallest = entry.get("total", 0) or 0
         unit = UNITS.get(coin, 1) or 1
         crypto = smallest / unit
-        try:
-            usd = await _coin_balance_usd(coin, smallest)
-        except Exception:
+        usd = priced[idx]
+        idx += 1
+        if isinstance(usd, Exception):
             usd = 0.0
+        else:
+            usd = float(usd or 0)
         total_usd += usd
+        if smallest == 0 and usd == 0:
+            continue  # skip empty lines
         lines.append(f"**{coin.upper()}:** `{crypto:.8f}` (~${usd:,.2f})")
     lines.append(f"*Total:* `${total_usd:,.2f}`")
     return "\n".join(lines)

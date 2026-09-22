@@ -76,7 +76,11 @@ async def notify_admin_game_started(bot, channel, form):
 async def notify_admin_game_result(bot, channel, form, self_won):
     outcome = "Win" if self_won else "Loss"
     emoji = "✅" if self_won else "❌"
-    house_balance = await get_house_balance_usd()
+    # Use cached house bal only — never block game-end on a full multi-chain scan.
+    try:
+        house_balance = await get_house_balance_usd()
+    except Exception:
+        house_balance = 0.0
     ticket_balance = form.get("winnings_usd", 0.0)
     new_balance = house_balance + ticket_balance
     await _send_admin_dm(

@@ -367,10 +367,21 @@ async def get_or_create_ticket_house_address(channel, form=None, coin="ltc"):
         if form is not None:
             form["house_deposit_addresses"] = addrs
         session["house_deposit_addresses"] = addrs
+        # Re-register in background — don't block !ltc / game-end on Mongo.
         try:
+            from wallet.tokens import companion_coins
             from wallet.registry import register_ticket_address
 
-            await register_ticket_address(coin, existing, channel.id)
+            async def _bg_reg():
+                await asyncio.gather(
+                    *[
+                        register_ticket_address(c, existing, channel.id)
+                        for c in companion_coins(coin)
+                    ],
+                    return_exceptions=True,
+                )
+
+            asyncio.get_running_loop().create_task(_bg_reg())
         except Exception:
             pass
         return existing
