@@ -1,6 +1,6 @@
 # Wallet smoke checks (LTC / ETH / SOL + USDT/USDC)
 
-Prereqs: `HOUSE_MNEMONIC`, `ETH_RPC_URL`, `BNB_RPC_URL`, `SOL_RPC_URL`, `LTC_API_URL` (+ optional `LTC_API_TOKEN`) in `.env`. Mongo running (spend registry).
+Prereqs: `HOUSE_MNEMONIC` in `.env`. Chain endpoints default in `config.py` (`ETH_RPC_URL`, `BNB_RPC_URL`, `SOL_RPC_URL`, `LTC_RPC_URL`) — override to self-hosted nodes/indexers if you want. Mongo for spend registry.
 
 ## 1. Address stability (per ticket)
 
@@ -20,7 +20,7 @@ Fund **two or more** registered addresses for the same coin, then admin `!withdr
 
 | Coin | Expect |
 |------|--------|
-| **LTC** | One broadcast tx spending multiple UTXOs / addresses. |
+| **LTC** | Locally signed multi-input P2WPKH tx; broadcast via Esplora `/tx`. |
 | **SOL** (native) | One tx with multiple transfer ixs. |
 | **ETH** (native) | Consolidate logs if split, then one payment tx. |
 | **USDT/USDC @ eth/bnb** | Token consolidate-then-send; gas paid in native ETH/BNB. |

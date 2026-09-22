@@ -10,24 +10,38 @@ def mnemonic():
 
 
 def eth_rpc_url():
-    return (getattr(app_config, "ETH_RPC_URL", None) or os.getenv("ETH_RPC_URL") or "").strip()
+    return (
+        getattr(app_config, "ETH_RPC_URL", None)
+        or os.getenv("ETH_RPC_URL")
+        or "https://ethereum.publicnode.com"
+    ).strip()
 
 
 def sol_rpc_url():
-    return (getattr(app_config, "SOL_RPC_URL", None) or os.getenv("SOL_RPC_URL") or "").strip()
+    return (
+        getattr(app_config, "SOL_RPC_URL", None)
+        or os.getenv("SOL_RPC_URL")
+        or "https://api.mainnet-beta.solana.com"
+    ).strip()
 
 
 def bnb_rpc_url():
-    return (getattr(app_config, "BNB_RPC_URL", None) or os.getenv("BNB_RPC_URL") or "").strip()
+    return (
+        getattr(app_config, "BNB_RPC_URL", None)
+        or os.getenv("BNB_RPC_URL")
+        or "https://bsc-dataseed.binance.org"
+    ).strip()
 
 
-def ltc_api_url():
-    """Base URL for Litecoin explorer/API (BlockCypher-compatible or electrs)."""
-    return (getattr(app_config, "LTC_API_URL", None) or os.getenv("LTC_API_URL") or "").strip().rstrip("/")
-
-
-def ltc_api_token():
-    return (getattr(app_config, "LTC_API_TOKEN", None) or os.getenv("LTC_API_TOKEN") or "").strip()
+def ltc_rpc_url():
+    """Esplora-compatible Litecoin HTTP base (no API key)."""
+    return (
+        getattr(app_config, "LTC_RPC_URL", None)
+        or os.getenv("LTC_RPC_URL")
+        or getattr(app_config, "LTC_API_URL", None)  # back-compat
+        or os.getenv("LTC_API_URL")
+        or "https://litecoinspace.org/api"
+    ).strip().rstrip("/")
 
 
 def require_mnemonic():
