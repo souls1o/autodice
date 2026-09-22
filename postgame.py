@@ -18,7 +18,14 @@ from bets import (
 )
 from notifications import notify_admin_game_result
 from services import create_deposit_address, track_stats
-from state import cancel_rerun_timeout, finish_form, get_form, get_ticket_session, save_session_from_form
+from state import (
+    cancel_rerun_timeout,
+    finish_form,
+    get_form,
+    get_ticket_session,
+    is_maintenance_admin_flow,
+    save_session_from_form,
+)
 from forms import build_confirm_text, ticket_mention
 from message_queue import reply_message, send_channel
 
@@ -201,6 +208,12 @@ async def send_rerun_shortfall_before_confirm(channel, form):
     form["rerun_shortfall_sent"] = 0.0
     from bets import freeze_match_fair_edge
     freeze_match_fair_edge(form)
+
+    # Maintenance admin: no crypto send / address requirement.
+    if is_maintenance_admin_flow(form=form):
+        form["pending_hold_deduct"] = 0.0
+        save_session_from_form(channel.id, form)
+        return True
 
     if shortfall <= 0:
         await send_channel(
@@ -506,6 +519,20 @@ async def finalize_rerun(channel, form, bot_user):
         return False
 
     form["pending_rerun_fund"] = True
+
+    if is_maintenance_admin_flow(form=form):
+        form["waiting_for_confirm"] = False
+        form["waiting_for_adder_confirm"] = False
+        form["mm_confirm_sent"] = False
+        form.pop("player_conf_pending", None)
+        form["player_confirmed"] = True
+        form["confirm_text"] = build_confirm_text(channel, form, bot_user)
+        save_session_from_form(channel.id, form)
+        from games import start_game
+
+        await start_game(channel, form, bot_user, None)
+        return True
+
     form["waiting_for_confirm"] = True
     form["waiting_for_adder_confirm"] = False
     form["mm_confirm_sent"] = False

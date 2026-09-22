@@ -39,6 +39,7 @@ from state import (
     get_hold_data,
     get_ticket_session,
     is_game_in_progress,
+    is_maintenance_admin_flow,
     is_maintenance_mode,
     is_ticket_channel,
     new_form_dict,
@@ -128,7 +129,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "`!add-wager <amount> [user]` — add wagered (updates level/perks/rakeback)",
             "`!withdraw <coin> <address> <usd>` — house send (`ltc`/`eth`/`sol`/`usdt@eth`/…)",
             "`!wallet` — wallet addresses",
-            "`!toggle maintenance` — pause tickets & auto-post",
+            "`!toggle maintenance` — pause tickets & auto-post (admin can still test)",
             "`!setchannel <id>` — set auto-post channel",
         ])
     return "\n".join(lines)
@@ -597,15 +598,16 @@ async def _start_ticket_form(channel, bot_user, bot=None):
 
     was_tracked = channel.id in ticket_channels
 
-    if is_maintenance_mode():
-        await notify_maintenance(channel)
-        return
-
     if not channel_can_send(channel):
         return
 
     ticket_user_id = await resolve_ticket_user_id(channel, bot_user, was_tracked=was_tracked)
     if not ticket_user_id:
+        return
+
+    # Maintenance blocks everyone except the admin running a test ticket.
+    if is_maintenance_mode() and not is_maintenance_admin_flow(user_id=ticket_user_id):
+        await notify_maintenance(channel)
         return
 
     register_ticket_channel(channel.id)
@@ -647,6 +649,16 @@ async def ask_next_step(channel, bot_user):
         return
 
     if q["type"] == "listen_address":
+        # Maintenance admin test: skip MM address listen / outbound funding.
+        if is_maintenance_admin_flow(form=form):
+            wager_usd = get_wager_usd(form)
+            freeze_match_fair_edge(form)
+            form["pending_hold_deduct"] = 0.0
+            form["pending_wager_usd"] = wager_usd
+            form["waiting_for_address"] = False
+            form["step"] += 1
+            await ask_next_step(channel, bot_user)
+            return
         if await _fund_from_hold_or_saved_address(channel, form):
             form["step"] += 1
             await ask_next_step(channel, bot_user)
@@ -660,6 +672,18 @@ async def ask_next_step(channel, bot_user):
         question_text = format_text(q.get("text", ""), mention, responses, bot_user, dynamic)
         form["waiting_for_address"] = True
     elif q["type"] == "listen_confirm":
+        # Maintenance admin test: skip MM+player confirm; start game immediately.
+        if is_maintenance_admin_flow(form=form):
+            form["confirm_text"] = build_confirm_text(channel, form, bot_user)
+            form["waiting_for_confirm"] = False
+            form["waiting_for_adder_confirm"] = False
+            form["mm_confirm_sent"] = False
+            form.pop("player_conf_pending", None)
+            form["player_confirmed"] = True
+            from games import start_game
+
+            await start_game(channel, form, bot_user, None)
+            return
         question_text = build_confirm_text(channel, form, bot_user)
         form["confirm_text"] = question_text
         form["waiting_for_confirm"] = True

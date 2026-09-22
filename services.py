@@ -665,6 +665,11 @@ def track_ticket_deposit_address(channel_id, address, coin="ltc"):
     """
     if not address:
         return
+    from state import is_maintenance_mode
+
+    # No inbound polling while maintenance is on (admin test tickets skip crypto listen).
+    if is_maintenance_mode():
+        return
     from wallet.tokens import companion_coins
 
     address = str(address).strip()
