@@ -23,6 +23,8 @@ from bets import (
     get_wager_usd,
     normalize_bet_response,
     normalize_coin,
+    set_player_hold_usd,
+    set_self_hold_usd,
     sync_winnings_crypto,
     usd_to_smallest_unit,
 )
@@ -66,7 +68,7 @@ COIN_ADDRESS_COMMANDS = {
 TICKET_COMMANDS = frozenset({
     "!ltc", "!eth", "!sol",
     "!restart", "!hold", "!profile", "!rerun", "!cancel",
-    "!clearhold", "!setbet", "!setplayer", "!changebet", "!changeplayer",
+    "!clearhold", "!sethold", "!setbet", "!setplayer", "!changebet", "!changeplayer",
     "!tip", "!withdraw",
     "!forceend",
 })
@@ -118,6 +120,7 @@ def build_dm_help_text(user_id, *, is_mm=False):
             "`!tip` — view tip balance (1% of player wager on self wins)",
             "`!withdraw <usd|all> <ltc_address>` — withdraw tip balance",
             "`!clearhold` [@user|id] — clear both holds, or only the mentioned side",
+            "`!sethold <@user|id> <usd>` — set self or player hold to an amount",
             "`!forceend <@user|id>` — force-finish stuck match; award that winner",
         ])
     if user_id == config.ADMIN_USER_ID:
@@ -748,6 +751,13 @@ async def handle_ticket_command(message, bot_user, bot=None):
             return True
         await handle_clearhold_command(message, bot_user)
         return True
+    if cmd == "!sethold":
+        from users import user_has_mm_role
+        if not await user_has_mm_role(bot, message.author.id, member=message.author):
+            await send_channel(message.channel, "❌ MM only command.")
+            return True
+        await handle_sethold_command(message, bot_user)
+        return True
 
     if content not in TICKET_COMMANDS and cmd not in TICKET_COMMANDS:
         return False
@@ -944,6 +954,81 @@ async def handle_clearhold_command(message, bot_user):
     await send_channel(
         channel,
         f"❌ Use `!clearhold` (both), `{bot_user.mention}` (self), or the ticket player.",
+    )
+
+
+async def handle_sethold_command(message, bot_user):
+    """MM: set self or player hold to an absolute USD amount."""
+    from users import parse_discord_user_id
+
+    channel = message.channel
+    form = get_form(channel.id)
+    session = get_ticket_session(channel.id)
+    player_id = (form or {}).get("ticket_user_id") or session.get("ticket_user_id")
+    parts = message.content.strip().split()
+
+    if len(parts) < 3 and not (message.mentions and len(parts) >= 2):
+        await send_channel(
+            channel,
+            f"Usage: `!sethold {bot_user.mention} <usd>` or `!sethold <@player|id> <usd>`",
+        )
+        return
+
+    # Parse target + amount. Mentions may make the usd token parts[-1].
+    amount_raw = parts[-1]
+    try:
+        amount = round(float(amount_raw), 2)
+    except ValueError:
+        await send_channel(channel, "❌ Amount must be a number.")
+        return
+    if amount < 0:
+        await send_channel(channel, "❌ Amount cannot be negative.")
+        return
+
+    target_raw = " ".join(parts[1:-1]).strip()
+    try:
+        target_id = parse_discord_user_id(target_raw, mentions=message.mentions)
+    except (TypeError, ValueError):
+        await send_channel(channel, "❌ Invalid user id / mention.")
+        return
+
+    def _set_self(val):
+        if form:
+            return set_self_hold_usd(form, val)
+        session["self_hold_usd"] = val
+        session["winnings_usd"] = val
+        return val
+
+    def _set_player(val):
+        if form:
+            return set_player_hold_usd(form, val)
+        session["player_hold_usd"] = val
+        return val
+
+    if int(target_id) == int(bot_user.id):
+        set_to = _set_self(amount)
+        if form:
+            save_session_from_form(channel.id, form)
+        await send_channel(
+            channel,
+            f"✅ Set {bot_user.mention} hold to `${set_to:.2f}`.",
+        )
+        return
+
+    if player_id and int(target_id) == int(player_id):
+        set_to = _set_player(amount)
+        if form:
+            save_session_from_form(channel.id, form)
+        player_form = form or {"ticket_user_id": player_id}
+        await send_channel(
+            channel,
+            f"✅ Set {ticket_mention(channel, player_form)} hold to `${set_to:.2f}`.",
+        )
+        return
+
+    await send_channel(
+        channel,
+        f"❌ Target must be `{bot_user.mention}` (self) or the ticket player.",
     )
 
 

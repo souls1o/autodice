@@ -409,6 +409,30 @@ def clear_player_hold(form):
     form["player_hold_usd"] = 0.0
 
 
+def set_self_hold_usd(form, usd):
+    """Set self hold to an absolute USD amount (>= 0)."""
+    sync_legacy_winnings(form)
+    try:
+        amount = max(round(float(usd or 0), 2), 0.0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    form["self_hold_usd"] = amount
+    form["winnings_usd"] = amount
+    sync_winnings_crypto(form)
+    return amount
+
+
+def set_player_hold_usd(form, usd):
+    """Set player hold to an absolute USD amount (>= 0)."""
+    sync_legacy_winnings(form)
+    try:
+        amount = max(round(float(usd or 0), 2), 0.0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    form["player_hold_usd"] = amount
+    return amount
+
+
 def display_his_bet_usd(form):
     """Player side shown in XvY — 0 when staking rakeback (no crypto wager)."""
     if is_rakeback_bet(form):

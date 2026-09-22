@@ -13,8 +13,8 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = os.getenv("DB_NAME", "gatodicer")
 
 # Hardcoded deposit address for !sol (Apirone is not used for SOL).
-SOL_DEPOSIT_ADDRESS = "HznFzJNmAuq8ds8dAvpq4rL5xLdc6aQmXscBjP7jjtRr"
-ETH_DEPOSIT_ADDRESS = "0xA65F50b9d02150A628191bc8B20Ea8C3086543a9"
+SOL_DEPOSIT_ADDRESS = "DPKuctgZDV1od6wD3wcpcaQ124ncAjnM4ZsqqrjfLX6P"
+ETH_DEPOSIT_ADDRESS = "0x346aFD9D90b50c4C71692AEDd91e1CB0B67E5AcB"
 
 ADMIN_USER_ID = 1200925985999171706
 # Guild where tickets, autopost, and ticket commands run (DM commands ignore this).
@@ -183,7 +183,7 @@ FORM_QUESTIONS = [
     },
     {
         "type": "open",
-        "text": '💸 **How much would you like to bet in USD?**\n\n**Example:** "5" or `"rakeback"` / `"rb"` to use your rakeback (MIN: __$1__ | MAX: __${max_bet}__)',
+        "text": '💸 **How much would you like to bet in USD?**\n\n**Example:** 5 or `rakeback` / `rb` to use your rakeback (MIN: __$5__ | MAX: __${max_bet}__)',
         "short_key": "bet",
         "validator": "bet_validator"
     },

@@ -481,7 +481,7 @@ async def prompt_rerun_bet(channel, form, bot_user):
     await send_channel(
         channel,
         f"💸 {mention} **How much would you like to bet for the rerun?**\n\n"
-        f'**Example:** "5 {coin}", "10 litecoin", or `"rakeback"` / `"rb"` '
+        f'**Example:** 5 or `rakeback` / `rb` '
         f"(MIN: __$5__ | MAX: __${max_bet}__)\n"
         f"-# Same rules as last completed match.",
     )
