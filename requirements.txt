@@ -3,11 +3,3 @@ motor
 pymongo
 requests
 python-dotenv
-mnemonic
-bip-utils
-coincurve
-base58
-eth-account
-web3
-solders
-solana

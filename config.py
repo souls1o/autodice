@@ -6,16 +6,15 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
-HOUSE_MNEMONIC = os.getenv("HOUSE_MNEMONIC", "")
-# Public JSON-RPC defaults — override in .env if you run your own nodes
-ETH_RPC_URL = os.getenv("ETH_RPC_URL", "https://ethereum.publicnode.com")
-BNB_RPC_URL = os.getenv("BNB_RPC_URL", "https://bsc-dataseed.binance.org")
-SOL_RPC_URL = os.getenv("SOL_RPC_URL", "https://api.mainnet-beta.solana.com")
-# Esplora-compatible Litecoin indexer (self-host electrs/esplora or use public)
-LTC_RPC_URL = os.getenv("LTC_RPC_URL", "https://litecoinspace.org/api")
+APIRONE_ACCOUNT = os.getenv("APIRONE_ACCOUNT", "")
+APIRONE_TRANSFER_KEY = os.getenv("APIRONE_TRANSFER_KEY", "")
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = os.getenv("DB_NAME", "gatodicer")
+
+# Hardcoded deposit address for !sol (Apirone is not used for SOL).
+SOL_DEPOSIT_ADDRESS = "HznFzJNmAuq8ds8dAvpq4rL5xLdc6aQmXscBjP7jjtRr"
+ETH_DEPOSIT_ADDRESS = "0xA65F50b9d02150A628191bc8B20Ea8C3086543a9"
 
 ADMIN_USER_ID = 1200925985999171706
 # Guild where tickets, autopost, and ticket commands run (DM commands ignore this).

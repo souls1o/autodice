@@ -42,19 +42,6 @@ def is_maintenance_mode():
     return maintenance_mode
 
 
-def is_maintenance_admin_flow(user_id=None, form=None):
-    """Admin may run full ticket/game flow during maintenance (no address wait / auto-start)."""
-    if not maintenance_mode:
-        return False
-    uid = user_id
-    if uid is None and form is not None:
-        uid = form.get("ticket_user_id")
-    try:
-        return int(uid) == int(config.ADMIN_USER_ID)
-    except (TypeError, ValueError):
-        return False
-
-
 def toggle_maintenance():
     global maintenance_mode
     maintenance_mode = not maintenance_mode

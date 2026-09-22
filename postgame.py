@@ -17,15 +17,8 @@ from bets import (
     usd_to_crypto_amount,
 )
 from notifications import notify_admin_game_result
-from services import create_deposit_address, track_stats
-from state import (
-    cancel_rerun_timeout,
-    finish_form,
-    get_form,
-    get_ticket_session,
-    is_maintenance_admin_flow,
-    save_session_from_form,
-)
+from services import create_apirone_address, track_stats
+from state import cancel_rerun_timeout, finish_form, get_form, get_ticket_session, save_session_from_form
 from forms import build_confirm_text, ticket_mention
 from message_queue import reply_message, send_channel
 
@@ -209,12 +202,6 @@ async def send_rerun_shortfall_before_confirm(channel, form):
     from bets import freeze_match_fair_edge
     freeze_match_fair_edge(form)
 
-    # Maintenance admin: no crypto send / address requirement.
-    if is_maintenance_admin_flow(form=form):
-        form["pending_hold_deduct"] = 0.0
-        save_session_from_form(channel.id, form)
-        return True
-
     if shortfall <= 0:
         await send_channel(
             channel,
@@ -349,13 +336,14 @@ async def _post_game_background(channel, form, self_won, bot_user, bot):
 
 
 async def get_or_create_ticket_house_address(channel, form=None, coin="ltc"):
-    """One house receive address per coin per ticket; reused for !ltc / !eth / !sol / stables / payout."""
+    """One house receive address per coin per ticket; reused for !ltc / payout / refund."""
     from state import get_form, get_ticket_session, save_session_from_form
-    from wallet.service import SUPPORTED
 
     coin = (coin or "ltc").lower()
-    if coin not in SUPPORTED:
-        return None
+    if coin == "sol":
+        return getattr(config, "SOL_DEPOSIT_ADDRESS", None) or None
+    if coin == "eth":
+        return getattr(config, "ETH_DEPOSIT_ADDRESS", None) or None
 
     form = form or get_form(channel.id)
     session = get_ticket_session(channel.id)
@@ -367,26 +355,9 @@ async def get_or_create_ticket_house_address(channel, form=None, coin="ltc"):
         if form is not None:
             form["house_deposit_addresses"] = addrs
         session["house_deposit_addresses"] = addrs
-        # Re-register in background — don't block !ltc / game-end on Mongo.
-        try:
-            from wallet.tokens import companion_coins
-            from wallet.registry import register_ticket_address
-
-            async def _bg_reg():
-                await asyncio.gather(
-                    *[
-                        register_ticket_address(c, existing, channel.id)
-                        for c in companion_coins(coin)
-                    ],
-                    return_exceptions=True,
-                )
-
-            asyncio.get_running_loop().create_task(_bg_reg())
-        except Exception:
-            pass
         return existing
 
-    address = await create_deposit_address(coin, channel_id=channel.id)
+    address = await create_apirone_address(coin)
     if not address:
         return None
     addrs[coin] = address
@@ -530,20 +501,6 @@ async def finalize_rerun(channel, form, bot_user):
         return False
 
     form["pending_rerun_fund"] = True
-
-    if is_maintenance_admin_flow(form=form):
-        form["waiting_for_confirm"] = False
-        form["waiting_for_adder_confirm"] = False
-        form["mm_confirm_sent"] = False
-        form.pop("player_conf_pending", None)
-        form["player_confirmed"] = True
-        form["confirm_text"] = build_confirm_text(channel, form, bot_user)
-        save_session_from_form(channel.id, form)
-        from games import start_game
-
-        await start_game(channel, form, bot_user, None)
-        return True
-
     form["waiting_for_confirm"] = True
     form["waiting_for_adder_confirm"] = False
     form["mm_confirm_sent"] = False

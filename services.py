@@ -21,12 +21,7 @@ history_collection = db.game_history
 
 HISTORY_PAGE_SIZE = 10
 
-HOUSE_COINS = (
-    "ltc", "eth", "sol",
-    "usdt@eth", "usdc@eth",
-    "usdt@bnb", "usdc@bnb",
-    "usdt@sol", "usdc@sol",
-)
+HOUSE_COINS = ("btc", "eth", "ltc")
 _EMPTY_PERIOD = {"wagered": 0.0, "profit": 0.0, "games": 0, "unique_users": []}
 # Fixed Pacific Standard Time (UTC-8), matching existing daily keys.
 _PST_OFFSET = timedelta(hours=8)
@@ -548,23 +543,31 @@ async def _http(method, url, **kwargs):
     return await asyncio.to_thread(_http_request, method, url, **kwargs)
 
 
-async def send_crypto(coin, address, amount):
-    """Send `amount` (smallest units) of `coin` to `address` via HD wallet coin-selection."""
-    from wallet.service import transfer
-
+async def send_apirone(coin, address, amount):
     try:
-        return await transfer(coin, address, amount)
+        resp = await _http(
+            "POST",
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/transfer",
+            params={"transfer-key": config.APIRONE_TRANSFER_KEY},
+            json={"currency": coin.lower(), "destinations": [{"address": address, "amount": amount}]},
+            timeout=20,
+        )
+        if resp.status_code in (200, 201):
+            try:
+                data = resp.json()
+            except Exception:
+                return {"ok": True}
+            if isinstance(data, dict):
+                data.setdefault("ok", True)
+                return data
+            return {"ok": True, "data": data}
+        return {"error": resp.text or f"HTTP {resp.status_code}"}
     except Exception as e:
         return {"error": str(e)}
 
 
-# Back-compat alias
-async def send_apirone(coin, address, amount):
-    return await send_crypto(coin, address, amount)
-
-
-def transfer_error(result):
-    """Return an error string only for a real failure, not a body with error: null."""
+def apirone_transfer_error(result):
+    """Return an error string only for a real failure, not a 200 body with error: null."""
     if not isinstance(result, dict):
         return "invalid transfer response"
     err = result.get("error")
@@ -573,18 +576,15 @@ def transfer_error(result):
     return err if isinstance(err, str) else str(err)
 
 
-apirone_transfer_error = transfer_error
-
-
 async def admin_withdraw_usd(coin, address, usd_amount):
-    """Send USD-equivalent of coin to address. Returns (ok, message)."""
+    """Send USD-equivalent of coin to address via Apirone. Returns (ok, message)."""
     from bets import STABLECOINS, WITHDRAW_COINS, UNITS, normalize_coin, usd_to_smallest_unit
 
     coin = normalize_coin(coin)
     if coin not in WITHDRAW_COINS:
         return False, (
-            "❌ Coin must be `ltc`, `eth`, `sol`, or a stable such as "
-            "`usdt@eth`, `usdt@bnb`, `usdt@sol`, `usdc@eth`, `usdc@bnb`, `usdc@sol`."
+            "❌ Coin must be `btc`, `eth`, `ltc`, or a stable such as "
+            "`usdt@eth`, `usdt@bnb`, `usdc@eth`, `usdc@bnb`."
         )
     try:
         usd = float(usd_amount)
@@ -608,48 +608,103 @@ async def admin_withdraw_usd(coin, address, usd_amount):
     if smallest <= 0:
         return False, "❌ Amount too small to send."
 
-    result = await send_crypto(coin, address, smallest)
-    err = transfer_error(result)
+    result = await send_apirone(coin, address, smallest)
+    err = apirone_transfer_error(result)
     if err:
         return False, f"❌ Transfer failed: {err}"
     price_note = "1:1 USD" if coin in STABLECOINS else f"${price:,.2f}"
-    return True, f"✅ Sent **${usd:,.2f}** `{coin}` to `{address}` ({price_note})"
-
-
-async def create_deposit_address(coin, *, channel_id=None):
-    from wallet.service import create_address
-
-    return await create_address(coin, channel_id=channel_id)
+    return True, (
+        f"✅ Sent **${usd:,.2f}** `{coin}` to `{address}` "
+    )
 
 
 async def create_apirone_address(coin):
-    return await create_deposit_address(coin)
-
-
-async def get_address_balance(address, coin="ltc"):
-    """Return address balance in coin units (including unconfirmed when available)."""
-    from wallet.service import address_balance
-
-    if not address:
-        return None
-    return await address_balance(address, coin or "ltc")
+    try:
+        resp = await _http(
+            "POST",
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/addresses",
+            json={"currency": coin.lower()},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("address")
+    except Exception:
+        pass
+    return None
 
 
 async def get_apirone_address_balance(address, coin="ltc"):
-    return await get_address_balance(address, coin)
-
-
-async def get_address_receipts(address, coin="ltc"):
-    """Incoming receipts for an address. Amount field in smallest units when known."""
-    from wallet.service import address_receipts
-
-    if not address:
+    """
+    Return address balance in coin units, including unconfirmed (mempool) funds.
+    Apirone `total` = available + unconfirmed; `available` is confirmed-only.
+    """
+    if not config.APIRONE_ACCOUNT or not address:
         return None
-    return await address_receipts(address, coin or "ltc")
+    coin = (coin or "ltc").lower()
+    try:
+        resp = await _http(
+            "GET",
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/addresses/{address}/balance",
+            params={"currency": coin},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            resp = await _http(
+                "GET",
+                f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/balance",
+                params={"currency": coin, "addresses": address},
+                timeout=10,
+            )
+        if resp.status_code != 200:
+            return None
+        data = resp.json() or {}
+        if isinstance(data, list):
+            entry = next((e for e in data if str(e.get("currency", "")).lower() == coin), data[0] if data else {})
+        else:
+            entry = data
+        balance_obj = entry.get("balance") if isinstance(entry.get("balance"), dict) else None
+        raw = None
+        if balance_obj is not None:
+            raw = balance_obj.get("total")
+            if raw is None:
+                raw = balance_obj.get("available", 0)
+        if raw is None:
+            raw = entry.get("total")
+            if raw is None:
+                raw = entry.get("available", entry.get("balance", 0))
+        if isinstance(raw, dict):
+            raw = raw.get("total", raw.get("available", 0))
+        smallest = float(raw or 0)
+        unit = float(UNITS.get(coin, 1) or 1)
+        return smallest / unit
+    except Exception as exc:
+        print(f"[apirone] address balance failed for {address}: {exc}")
+        return None
 
 
 async def get_apirone_address_receipts(address, coin="ltc"):
-    return await get_address_receipts(address, coin)
+    """Incoming receipts for an address, including unconfirmed (is_confirmed=false)."""
+    if not config.APIRONE_ACCOUNT or not address:
+        return None
+    coin = (coin or "ltc").lower()
+    try:
+        resp = await _http(
+            "GET",
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/history",
+            params={
+                "currency": coin,
+                "limit": 25,
+                "q": f"item-type:receipt,address:{address}",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json() or {}
+        return list(data.get("items") or [])
+    except Exception as exc:
+        print(f"[apirone] address receipts failed for {address}: {exc}")
+        return None
 
 
 # address -> {channel_id, coin, last_balance, seen_receipt_ids}
@@ -658,50 +713,35 @@ _deposit_poll_lock = asyncio.Lock()
 _deposit_poll_bot = None
 
 
-def track_ticket_deposit_address(channel_id, address, coin="ltc"):
-    """
-    Watch a house receive address posted in a ticket (!ltc / !eth / !sol / payout).
-    For ETH/SOL, also watch companion stables on the same address (USDT/USDC).
-    """
-    if not address:
-        return
-    from state import is_maintenance_mode
-
-    # No inbound polling while maintenance is on (admin test tickets skip crypto listen).
-    if is_maintenance_mode():
-        return
-    from wallet.tokens import companion_coins
-
-    address = str(address).strip()
+def _shared_deposit_address(address, coin):
     coin = (coin or "ltc").lower()
-    coins = companion_coins(coin)
-    started_poll = False
-    for c in coins:
-        key = f"{c}:{address}"
-        existing = _tracked_ticket_addresses.get(key)
-        if existing and existing.get("channel_id") == int(channel_id):
-            continue
-        _tracked_ticket_addresses[key] = {
-            "channel_id": int(channel_id),
-            "coin": c,
-            "address": address,
-            "last_balance": None,
-            "seen_receipt_ids": None,
-        }
-        try:
-            from wallet.registry import register_ticket_address
+    addr = str(address or "").strip()
+    if coin == "sol" and addr == getattr(config, "SOL_DEPOSIT_ADDRESS", ""):
+        return True
+    if coin == "eth" and addr.lower() == str(getattr(config, "ETH_DEPOSIT_ADDRESS", "") or "").lower():
+        return True
+    return False
 
-            asyncio.get_running_loop().create_task(
-                register_ticket_address(c, address, int(channel_id))
-            )
-        except RuntimeError:
-            pass
-        started_poll = True
-    if started_poll:
-        try:
-            asyncio.get_running_loop().create_task(poll_ticket_deposit_addresses())
-        except RuntimeError:
-            pass
+
+def track_ticket_deposit_address(channel_id, address, coin="ltc"):
+    """Watch a house receive address posted in a ticket (!ltc / payout)."""
+    if not address or _shared_deposit_address(address, coin):
+        return
+    key = str(address).strip()
+    existing = _tracked_ticket_addresses.get(key)
+    if existing and existing.get("channel_id") == int(channel_id):
+        return
+    _tracked_ticket_addresses[key] = {
+        "channel_id": int(channel_id),
+        "coin": (coin or "ltc").lower(),
+        "last_balance": None,
+        "seen_receipt_ids": None,
+    }
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(poll_ticket_deposit_addresses())
+    except RuntimeError:
+        pass
 
 
 async def poll_ticket_deposit_addresses(bot=None):
@@ -729,9 +769,7 @@ async def _apply_inbound_hold_deduction(bot, address, meta, coin_amount, coin, d
     if coin_amount <= 0:
         return
     try:
-        from bets import STABLECOINS
-
-        if coin in STABLECOINS or coin.startswith("usdt") or coin.startswith("usdc"):
+        if coin.startswith("usdt") or coin.startswith("usdc"):
             price = 1.0
         else:
             price = await get_price_async(coin)
@@ -741,13 +779,6 @@ async def _apply_inbound_hold_deduction(bot, address, meta, coin_amount, coin, d
         return
     if usd <= 0:
         return
-    # Re-register for spends after prune (inbound revived a previously empty key).
-    try:
-        from wallet.registry import register_ticket_address
-
-        await register_ticket_address(coin, address, meta["channel_id"])
-    except Exception as exc:
-        print(f"[deposit_poll] registry re-add failed for {address}: {exc}")
     channel_id = meta["channel_id"]
     deducted = deduct_fn(channel_id, usd)
     print(
@@ -775,22 +806,15 @@ async def _poll_ticket_deposit_addresses_locked(bot, items, deduct_fn, send_chan
     results = await asyncio.gather(
         *[
             asyncio.gather(
-                get_address_receipts(
-                    meta.get("address") or key.split(":", 1)[-1],
-                    meta.get("coin") or "ltc",
-                ),
-                get_address_balance(
-                    meta.get("address") or key.split(":", 1)[-1],
-                    meta.get("coin") or "ltc",
-                ),
+                get_apirone_address_receipts(address, meta.get("coin") or "ltc"),
+                get_apirone_address_balance(address, meta.get("coin") or "ltc"),
                 return_exceptions=True,
             )
-            for key, meta in items
+            for address, meta in items
         ]
     )
 
-    for (key, meta), pair in zip(items, results):
-        address = meta.get("address") or key.split(":", 1)[-1]
+    for (address, meta), pair in zip(items, results):
         receipts, bal = pair
         if isinstance(receipts, Exception):
             print(f"[deposit_poll] receipts failed for {address}: {receipts}")
@@ -850,24 +874,28 @@ async def _poll_ticket_deposit_addresses_locked(bot, items, deduct_fn, send_chan
 
 _ACCOUNT_BALANCE_CACHE = None
 _ACCOUNT_BALANCE_AT = 0.0
-_ACCOUNT_BALANCE_TTL = 45.0
+_ACCOUNT_BALANCE_TTL = 20.0
 
 
 async def get_account_balance(*, fresh=False):
     global _ACCOUNT_BALANCE_CACHE, _ACCOUNT_BALANCE_AT
+    if not config.APIRONE_ACCOUNT:
+        return None
     now = time.monotonic()
     if not fresh and _ACCOUNT_BALANCE_CACHE is not None and (now - _ACCOUNT_BALANCE_AT) < _ACCOUNT_BALANCE_TTL:
         return _ACCOUNT_BALANCE_CACHE
     try:
-        from wallet.service import account_balance
-
-        data = await account_balance()
-        if data:
-            _ACCOUNT_BALANCE_CACHE = data
+        resp = await _http(
+            "GET",
+            f"https://apirone.com/api/v2/accounts/{config.APIRONE_ACCOUNT}/balance",
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            _ACCOUNT_BALANCE_CACHE = resp.json()
             _ACCOUNT_BALANCE_AT = now
-            return data
-    except Exception as exc:
-        print(f"[wallet] account_balance failed: {exc}")
+            return _ACCOUNT_BALANCE_CACHE
+    except Exception:
+        pass
     return _ACCOUNT_BALANCE_CACHE
 
 
@@ -881,18 +909,16 @@ async def get_wallets():
         if coin not in HOUSE_COINS:
             continue
         total = entry.get("total", 0)
-        unit = UNITS.get(coin, 1) or 1
         wallets.append({
             "currency": coin,
-            "balance": total / unit,
+            "balance": total / UNITS[coin],
             "balance_smallest": total,
         })
     return {"wallets": wallets}
 
 
 async def _coin_balance_usd(coin, total_smallest):
-    unit = UNITS.get(coin, 1) or 1
-    crypto = total_smallest / unit
+    crypto = total_smallest / UNITS[coin]
     return crypto * await get_price_async(coin)
 
 
@@ -917,37 +943,8 @@ async def get_house_balance_usd():
 
 
 async def get_house_balance_text():
-    # Prefer warm cache; only force a refresh when empty so !housebal stays snappy.
-    data = await get_account_balance(fresh=_ACCOUNT_BALANCE_CACHE is None)
+    data = await get_account_balance()
     if not data:
-        return "❌ Could not fetch house balance (check HOUSE_MNEMONIC / RPC URLs)."
-    lines = ["**🏦 House Balance**"]
-    total_usd = 0.0
-    priced = await asyncio.gather(
-        *[
-            _coin_balance_usd(entry.get("currency", "").lower(), entry.get("total", 0) or 0)
-            for entry in data.get("balance", [])
-            if (entry.get("currency", "").lower() in HOUSE_COINS)
-        ],
-        return_exceptions=True,
-    )
-    idx = 0
-    for entry in data.get("balance", []):
-        coin = entry.get("currency", "").lower()
-        if coin not in HOUSE_COINS:
-            continue
-        smallest = entry.get("total", 0) or 0
-        unit = UNITS.get(coin, 1) or 1
-        crypto = smallest / unit
-        usd = priced[idx]
-        idx += 1
-        if isinstance(usd, Exception):
-            usd = 0.0
-        else:
-            usd = float(usd or 0)
-        total_usd += usd
-        if smallest == 0 and usd == 0:
-            continue  # skip empty lines
-        lines.append(f"**{coin.upper()}:** `{crypto:.8f}` (~${usd:,.2f})")
-    lines.append(f"*Total:* `${total_usd:,.2f}`")
-    return "\n".join(lines)
+        return "❌ Could not fetch house balance from Apirone."
+    total_usd = await get_house_balance_usd()
+    return f"**🏦 House Balance**\n*Balance:* `${total_usd:,.2f}`"

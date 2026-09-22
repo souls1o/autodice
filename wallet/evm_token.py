@@ -47,15 +47,10 @@ def _rpc_url(chain: str) -> str:
     raise RuntimeError(f"unsupported EVM chain: {chain}")
 
 
-_w3_by_chain: dict[str, Web3] = {}
-
-
 def _w3(chain: str) -> Web3:
-    cached = _w3_by_chain.get(chain)
-    if cached is not None:
-        return cached
-    w3 = Web3(Web3.HTTPProvider(_rpc_url(chain), request_kwargs={"timeout": 12}))
-    _w3_by_chain[chain] = w3
+    w3 = Web3(Web3.HTTPProvider(_rpc_url(chain), request_kwargs={"timeout": 30}))
+    if not w3.is_connected():
+        raise RuntimeError(f"{chain.upper()} RPC not connected")
     return w3
 
 

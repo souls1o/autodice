@@ -14,20 +14,14 @@ from wallet.select import select_largest_first
 
 UNITS = 10**18
 
-_w3_lock = None
-_w3_cached = None
-
 
 def _w3() -> Web3:
-    """Reuse one HTTP provider — is_connected() every call was a major latency hit."""
-    global _w3_cached
-    if _w3_cached is not None:
-        return _w3_cached
     url = wconfig.eth_rpc_url()
     if not url:
         raise RuntimeError("ETH_RPC_URL is not configured")
-    w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 12}))
-    _w3_cached = w3
+    w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 30}))
+    if not w3.is_connected():
+        raise RuntimeError("ETH RPC not connected")
     return w3
 
 
