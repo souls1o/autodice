@@ -26,6 +26,7 @@ RERUN_TIMEOUT_SECONDS = 180
 GAME_NUMBER_PATTERN = re.compile(r"Game\s*#(\d+)", re.IGNORECASE)
 GAME_NUMBER_SCAN_LIMIT = 10
 _game_number_lock = asyncio.Lock()
+_last_assigned_game_number = None
 
 
 def _parse_game_number(content):
@@ -36,7 +37,7 @@ def _parse_game_number(content):
 
 
 async def _read_latest_logged_game_number(guild, bot=None):
-    """Most recent `Game #N` in GAME_LOG_CHANNEL (history is newest-first)."""
+    """Most recent `Game #N` in GAME_LOG_CHANNEL (history is newest-first). Read-only."""
     channel = guild.get_channel(config.GAME_LOG_CHANNEL_ID) if guild else None
     if channel is None and bot is not None:
         try:
@@ -54,10 +55,17 @@ async def _read_latest_logged_game_number(guild, bot=None):
 
 
 async def get_next_game_number(guild, bot=None):
-    """Next id = latest Game # in the log channel + 1."""
+    """
+    Next id = latest Game # scanned from the log channel + 1.
+    Never posts to the log channel — announcement goes to the ticket only.
+    """
+    global _last_assigned_game_number
     async with _game_number_lock:
         logged = await _read_latest_logged_game_number(guild, bot)
-        return (logged or 0) + 1
+        floor = max(logged or 0, _last_assigned_game_number or 0)
+        next_num = floor + 1
+        _last_assigned_game_number = next_num
+        return next_num
 
 
 async def _get_guild_channel(guild, channel_id, bot=None):
@@ -82,6 +90,7 @@ async def post_victory_message(guild, form, bot=None):
 async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=None):
     from bets import get_match_bets, get_match_his_display
 
+    game_num = await get_next_game_number(ticket_channel.guild, bot)
     mention = ticket_mention(ticket_channel, form)
     _his_bet_usd, my_bet_usd, _coin, _rakeback = get_match_bets(form)
     his_display = format_bet_display(get_match_his_display(form))
@@ -100,30 +109,14 @@ async def announce_game_result(ticket_channel, form, self_won, bot_user, bot=Non
         if game == "coinflip"
         else "<:Dices:1259259866254676049>"
     )
-
-    guild = ticket_channel.guild
-    log_channel = await _get_guild_channel(guild, config.GAME_LOG_CHANNEL_ID, bot)
-
-    # Assign + post under one lock so the next game always sees this log first.
-    async with _game_number_lock:
-        logged = await _read_latest_logged_game_number(guild, bot)
-        game_num = (logged or 0) + 1
-        text = (
-            f"Game #{game_num} <:dahoodcasino:1259258576015458426>\n"
-            f"{game_emoji}\n"
-            f"{winner} overtakes {loser}\n"
-            f"{winner_bet}v{loser_bet}"
-        )
-        if log_channel is not None:
-            await send_channel(log_channel, text)
-        else:
-            print(f"[announce] GAME_LOG_CHANNEL_ID missing/unavailable; using #{game_num}")
-            await send_channel(ticket_channel, text)
-            return
-
-    # Mirror to ticket outside the lock (does not affect numbering).
-    if getattr(log_channel, "id", None) != getattr(ticket_channel, "id", None):
-        await send_channel(ticket_channel, text)
+    text = (
+        f"Game #{game_num} <:dahoodcasino:1259258576015458426>\n"
+        f"{game_emoji}\n"
+        f"{winner} overtakes {loser}\n"
+        f"{winner_bet}v{loser_bet}"
+    )
+    # Ticket only — never post to GAME_LOG_CHANNEL.
+    await send_channel(ticket_channel, text)
 
 
 async def record_winnings(channel, form, self_won):
